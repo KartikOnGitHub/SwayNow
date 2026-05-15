@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /chat/
+Disallow: /requests/
+Disallow: /profile/
+
+Sitemap: https://sway.app/sitemap.xml

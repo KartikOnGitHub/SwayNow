@@ -1,0 +1,132 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ───────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // ── Posts ──────────────────────────────────────────────
+    match /posts/{postId} {
+      // Anyone signed in can read posts
+      allow read: if isSignedIn();
+
+      // Users can only create posts as themselves with valid fields
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 280
+        && request.resource.data.intent in ["Explore","Party","Chill","Study","Sports"]
+        && request.resource.data.latitude is number
+        && request.resource.data.longitude is number
+        && request.resource.data.expiresAt is timestamp;
+
+      // Only the post author can update or delete their post
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    // ── Join Requests ──────────────────────────────────────
+    match /requests/{requestId} {
+      // Only sender or receiver can read this request
+      allow read: if isSignedIn() && (
+        resource.data.senderUserId == request.auth.uid ||
+        resource.data.receiverUserId == request.auth.uid
+      );
+
+      // Sender creates request — must be themselves, status must be pending
+      allow create: if isSignedIn()
+        && request.resource.data.senderUserId == request.auth.uid
+        && request.resource.data.status == "pending"
+        && request.resource.data.postId is string
+        && request.resource.data.receiverUserId is string
+        && request.resource.data.senderUserId != request.resource.data.receiverUserId;
+
+      // Only receiver can accept/reject (update status only)
+      allow update: if isSignedIn()
+        && resource.data.receiverUserId == request.auth.uid
+        && request.resource.data.status in ["accepted","rejected"]
+        // No other fields can be modified
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status"]);
+
+      // Sender can delete their own pending request
+      allow delete: if isSignedIn()
+        && resource.data.senderUserId == request.auth.uid;
+    }
+
+    // ── Messages ───────────────────────────────────────────
+    match /messages/{messageId} {
+      // Anyone signed in can read messages (clients filter by chatId)
+      allow read: if isSignedIn();
+
+      // Sender must be the auth'd user, message must have valid fields
+      allow create: if isSignedIn()
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 500
+        && request.resource.data.chatId is string;
+
+      // Messages cannot be edited or deleted (audit trail)
+      allow update, delete: if false;
+    }
+
+    // ── Interactions / Reviews / Trust ─────────────────────
+    match /interactions/{interactionId} {
+      // Anyone signed in can read (used for trust scores + public profiles)
+      allow read: if isSignedIn();
+
+      // User can only create interactions as themselves
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.met is bool
+        && request.resource.data.positive is bool;
+
+      // User can only update their own interaction
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+
+      // No deletes — preserve trust history
+      allow delete: if false;
+    }
+
+    // ── Reports ────────────────────────────────────────────
+    match /reports/{reportId} {
+      // Reports are write-only by users; only admins can read
+      allow read: if false;
+
+      // Anyone signed in can submit a report against another user
+      allow create: if isSignedIn()
+        && request.resource.data.reportedBy == request.auth.uid
+        && request.resource.data.reason in ["spam","harassment","inappropriate","other"];
+
+      allow update, delete: if false;
+    }
+
+    // ── Blocks ─────────────────────────────────────────────
+    match /blocks/{blockId} {
+      // User can read/manage only their own block records
+      allow read: if isSignedIn()
+        && resource.data.blockedBy == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && request.resource.data.blockedBy == request.auth.uid;
+
+      allow delete: if isSignedIn()
+        && resource.data.blockedBy == request.auth.uid;
+
+      allow update: if false;
+    }
+
+    // ── Default deny everything else ───────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
