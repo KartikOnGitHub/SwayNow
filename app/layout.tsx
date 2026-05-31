@@ -83,7 +83,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.json",
   verification: {
     // 🔧 Add your Google Search Console verification code here
-    // google: "your-google-verification-code",
+    google: "8SlgyRBk8wJb_QWUspAJ1M9Zk8q-A1LDkSv7WoC0dsI",
   },
 };
 
