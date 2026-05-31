@@ -3,10 +3,10 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, getAuth } from "firebase/auth";
 import { collection, query, where, getDocs, orderBy, Timestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { getReviews, getTrustScore, Review, TrustScore } from "@/lib/requests";
+import { getReviews, getTrustScore, Review, TrustScore, blockUser, unblockUser, isUserBlocked } from "@/lib/requests";
 import { getUserProfile, UserProfile } from "@/lib/profile";
 import { isActive } from "@/lib/expiry";
 
@@ -25,11 +25,21 @@ export default function ProfilePage() {
     const [trust, setTrust]       = useState<TrustScore | null>(null);
     const [posts, setPosts]       = useState<Post[]>([]);
     const [profile, setProfile]   = useState<UserProfile | null>(null);
-    const [isMe, setIsMe]         = useState(false);
+    const [isMe, setIsMe]             = useState(false);
+    const [isBlocked, setIsBlocked]   = useState(false);
+    const [blockLoading, setBlockLoading] = useState(false);
+    const [currentUserId, setCurrentUserId] = useState("");
 
     useEffect(() => {
-        const unsub = onAuthStateChanged(auth, (u) => {
-            if (u && u.uid === userId) setIsMe(true);
+        const unsub = onAuthStateChanged(auth, async (u) => {
+            if (!u) return;
+            setCurrentUserId(u.uid);
+            if (u.uid === userId) setIsMe(true);
+            else {
+                // Check if this user is blocked
+                const blocked = await isUserBlocked(u.uid, userId);
+                setIsBlocked(blocked);
+            }
         });
         return () => unsub();
     }, [userId]);
@@ -125,6 +135,33 @@ export default function ProfilePage() {
                 </div>
 
                 <div className="px-5 py-6 space-y-6">
+
+                    {/* Block / Unblock button — only show to other users */}
+                    {currentUserId && currentUserId !== userId && (
+                        <button
+                            onClick={async () => {
+                                setBlockLoading(true);
+                                try {
+                                    if (isBlocked) {
+                                        await unblockUser(currentUserId, userId);
+                                        setIsBlocked(false);
+                                    } else {
+                                        await blockUser(currentUserId, userId, profile?.displayName ?? "User");
+                                        setIsBlocked(true);
+                                    }
+                                } finally { setBlockLoading(false); }
+                            }}
+                            disabled={blockLoading}
+                            style={{ minHeight: 36 }}
+                            className={`text-xs font-semibold px-4 py-2 rounded-full border transition-all ${
+                                isBlocked
+                                    ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                                    : "border-red-500/30 text-red-400 bg-red-500/10 hover:bg-red-500/20"
+                            }`}
+                        >
+                            {blockLoading ? "…" : isBlocked ? "✓ Unblock" : "🚫 Block"}
+                        </button>
+                    )}
 
                     {/* Bio */}
                     {profile?.bio && (

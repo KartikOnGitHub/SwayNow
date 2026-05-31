@@ -15,7 +15,7 @@ import { auth, db } from "../lib/firebase";
 import { getDistanceKm, formatDistance } from "../lib/distance";
 import {
     sendJoinRequest, getAcceptedRequest, getPendingRequestId,
-    blockUser, reportUser, getTrustScore, TrustScore, ReportReason, JoinRequest,
+    blockUser, unblockUser, reportUser, getTrustScore, TrustScore, ReportReason, JoinRequest, getBlockedUserIds,
 } from "../lib/requests";
 import { Duration, DURATIONS, getExpiresAt, isActive, timeRemaining, lifeFraction } from "../lib/expiry";
 import { requestNotificationPermission, onForegroundMessage } from "../lib/notifications";
@@ -484,6 +484,7 @@ export default function Home() {
     const [actingPost, setActingPost]       = useState<string | null>(null);
     const [trustScores, setTrustScores]     = useState<Record<string, TrustScore>>({});
     const [reportingPost, setReportingPost] = useState<string | null>(null);
+    const [blockedIds, setBlockedIds]       = useState<Set<string>>(new Set());
     const [reportReason, setReportReason]   = useState<ReportReason>("spam");
     const [postActionMsg, setPostActionMsg] = useState<Record<string, string>>({});
 
@@ -522,6 +523,12 @@ export default function Home() {
         });
         return () => unsub();
     }, []);
+
+    // Load blocked users
+    useEffect(() => {
+        if (!user) return;
+        getBlockedUserIds(user.uid).then((ids) => setBlockedIds(new Set(ids))).catch(console.warn);
+    }, [user]);
 
     // Request notification permission after login
     useEffect(() => {
@@ -614,12 +621,14 @@ export default function Home() {
     // ── Derived ────────────────────────────────────────────
     const nearbyPosts: NearbyPost[] = allPosts
         .filter((p) => p.expiresAt && isActive(p.expiresAt))
+        .filter((p) => !blockedIds.has(p.userId))
         .map((p) => ({ ...p, distanceKm: userCoords ? getDistanceKm(userCoords.lat, userCoords.lng, p.latitude, p.longitude) : -1 }))
         .filter((p) => !userCoords || p.distanceKm <= RADIUS_KM)
         .sort((a, b) => (a.distanceKm < 0 ? 0 : a.distanceKm - b.distanceKm));
 
     const explorePosts: NearbyPost[] = allPosts
         .filter((p) => p.expiresAt && isActive(p.expiresAt))
+        .filter((p) => !blockedIds.has(p.userId))
         .filter((p) => p.city?.toLowerCase() === filterCity.toLowerCase())
         .map((p) => ({ ...p, distanceKm: -1 }));
 
@@ -702,7 +711,9 @@ export default function Home() {
     const handleBlock = async (uid: string, name: string) => {
         if (!user) return;
         await blockUser(user.uid, uid, name);
-        alert(`${name} blocked.`);
+        setBlockedIds((prev) => new Set([...prev, uid]));
+        setToast({ title: `${name} blocked`, body: "Their posts are hidden. You can unblock from their profile." });
+        setTimeout(() => setToast(null), 4000);
     };
 
     const handleReport = async (postId: string, uid: string, name: string) => {

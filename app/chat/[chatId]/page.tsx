@@ -8,7 +8,7 @@ import {
 	onSnapshot, serverTimestamp, Timestamp, getDocs,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { blockUser, reportUser, saveInteraction, ReportReason } from "@/lib/requests";
+import { blockUser, reportUser, saveInteraction, ReportReason, isUserBlocked } from "@/lib/requests";
 import { buildMessageNotif } from "@/lib/notifications";
 
 interface Message {
@@ -36,6 +36,7 @@ export default function ChatPage() {
 	const [messages, setMessages]       = useState<Message[]>([]);
 	const [text, setText]               = useState("");
 	const [sending, setSending]         = useState(false);
+	const [isBlocked, setIsBlocked]     = useState(false);
 	const [showMenu, setShowMenu]       = useState(false);
 	const [showReport, setShowReport]   = useState(false);
 	const [reportReason, setReportReason] = useState<ReportReason>("spam");
@@ -83,6 +84,12 @@ export default function ChatPage() {
 				console.error("Verify error:", e);
 			}
 
+			// Check if either party has blocked the other
+			if (u && auth.currentUser) {
+				const blocked = await isUserBlocked(u.uid, otherUserId || senderUserId).catch(() => false);
+				setIsBlocked(blocked as boolean);
+			}
+
 			setReady(true);
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,7 +126,7 @@ export default function ChatPage() {
 	}, [chatId, ready]);
 
 	const handleSend = async () => {
-		if (!user || !text.trim() || sending) return;
+		if (!user || !text.trim() || sending || isBlocked) return;
 		setSending(true);
 		const msgText = text.trim();
 		setText("");
@@ -147,15 +154,22 @@ export default function ChatPage() {
 	const handleBlock = async () => {
 		if (!user || !otherUserId) return;
 		await blockUser(user.uid, otherUserId, otherName || "User");
-		setActionMsg("User blocked.");
+		setIsBlocked(true);
+		setActionMsg("User blocked. They can no longer message you.");
 		setShowMenu(false);
 	};
 
 	const handleReport = async () => {
 		if (!user) return;
-		await reportUser(user.uid, otherUserId, otherName || "User", postId, reportReason);
-		setActionMsg("Report submitted.");
-		setShowReport(false);
+		try {
+			await reportUser(user.uid, otherUserId, otherName || "User", postId, reportReason);
+			setActionMsg("✓ Report submitted. Our team will review this.");
+			setShowReport(false);
+			setTimeout(() => setActionMsg(""), 4000);
+		} catch (e) {
+			console.error(e);
+			setActionMsg("Report failed — please try again.");
+		}
 	};
 
 	const handleFeedback = async (met: boolean, positive: boolean) => {
@@ -252,27 +266,46 @@ export default function ChatPage() {
 				<div ref={bottomRef} />
 			</div>
 
-			{/* Input */}
-			<div className="shrink-0 border-t border-white/[0.06] px-4 py-3 bg-[#0B0B0F] flex gap-3 items-end"
-			     style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 12px)" }}>
-        <textarea
-			value={text}
-	        onChange={(e) => setText(e.target.value)}
-	        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-	        placeholder={`Message ${displayName}…`}
-	        rows={1} maxLength={500}
-	        style={{ minHeight: 44 }}
-	        className="flex-1 bg-[#111118] border border-white/8 rounded-2xl px-4 py-3 text-[15px] text-white placeholder-[#52525B] outline-none focus:border-blue-500 resize-none transition-colors leading-relaxed"
-		/>
-				<button onClick={handleSend} disabled={sending || !text.trim()}
-				        style={{ minHeight: 44, minWidth: 44 }}
-				        className="rounded-2xl bg-blue-500 text-white px-4 font-semibold hover:bg-blue-600 active:scale-95 transition-all disabled:opacity-40 shrink-0 flex items-center justify-center">
-					{sending
-						? <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-						: <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-					}
-				</button>
-			</div>
+			{/* Input — disabled if blocked */}
+			{isBlocked ? (
+				<div className="shrink-0 border-t border-white/[0.06] px-4 py-4 bg-[#0B0B0F] text-center"
+				     style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 16px)" }}>
+					<p className="text-sm text-[#52525B]">🚫 You have blocked this user</p>
+					<button
+						onClick={async () => {
+							if (!user || !otherUserId) return;
+							const { unblockUser } = await import("@/lib/requests");
+							await unblockUser(user.uid, otherUserId);
+							setIsBlocked(false);
+							setActionMsg("User unblocked.");
+						}}
+						className="mt-2 text-xs text-blue-400 underline hover:text-blue-300 transition-colors"
+					>
+						Unblock to send messages
+					</button>
+				</div>
+			) : (
+				<div className="shrink-0 border-t border-white/[0.06] px-4 py-3 bg-[#0B0B0F] flex gap-3 items-end"
+				     style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 12px)" }}>
+          <textarea
+			  value={text}
+	          onChange={(e) => setText(e.target.value)}
+	          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+	          placeholder={`Message ${displayName}…`}
+	          rows={1} maxLength={500}
+	          style={{ minHeight: 44 }}
+	          className="flex-1 bg-[#111118] border border-white/8 rounded-2xl px-4 py-3 text-[15px] text-white placeholder-[#52525B] outline-none focus:border-blue-500 resize-none transition-colors leading-relaxed"
+		  />
+					<button onClick={handleSend} disabled={sending || !text.trim()}
+					        style={{ minHeight: 44, minWidth: 44 }}
+					        className="rounded-2xl bg-blue-500 text-white px-4 font-semibold hover:bg-blue-600 active:scale-95 transition-all disabled:opacity-40 shrink-0 flex items-center justify-center">
+						{sending
+							? <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+							: <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+						}
+					</button>
+				</div>
+			)}
 
 			{/* Report sheet */}
 			{showReport && (

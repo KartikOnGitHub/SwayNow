@@ -163,6 +163,29 @@ export async function isUserBlocked(
     return !snap.empty;
 }
 
+export async function unblockUser(
+    currentUserId: string,
+    targetUserId: string
+): Promise<void> {
+    const snap = await getDocs(query(
+        collection(db, "blocks"),
+        where("blockedBy",     "==", currentUserId),
+        where("blockedUserId", "==", targetUserId)
+    ));
+    for (const d of snap.docs) {
+        const { deleteDoc, doc: docRef } = await import("firebase/firestore");
+        await deleteDoc(docRef(db, "blocks", d.id));
+    }
+}
+
+export async function getBlockedUserIds(currentUserId: string): Promise<string[]> {
+    const snap = await getDocs(query(
+        collection(db, "blocks"),
+        where("blockedBy", "==", currentUserId)
+    ));
+    return snap.docs.map((d) => d.data().blockedUserId as string);
+}
+
 // ── Report ─────────────────────────────────────────────────
 
 export async function reportUser(
