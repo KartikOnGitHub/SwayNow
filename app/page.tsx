@@ -19,6 +19,7 @@ import {
 } from "../lib/requests";
 import { Duration, DURATIONS, getExpiresAt, isActive, timeRemaining, lifeFraction } from "../lib/expiry";
 import { requestNotificationPermission, onForegroundMessage } from "../lib/notifications";
+import { shareApp } from "../lib/share";
 
 
 // ── Types ──────────────────────────────────────────────────
@@ -569,6 +570,14 @@ export default function Home() {
 
     const handleLogout = async () => { await signOut(auth).catch(console.error); };
 
+    const handleShareApp = async () => {
+        const result = await shareApp();
+        if (result === "copied") {
+            setToast({ title: "Link copied!", body: "Share it with friends to grow your local scene." });
+            setTimeout(() => setToast(null), 3000);
+        }
+    };
+
     const handlePost = async () => {
         if (!user || !text.trim()) return;
         setPosting(true); setPostError(null); setPostSuccess(false);
@@ -740,6 +749,12 @@ export default function Home() {
                             className="px-6 rounded-2xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all shadow-lg shadow-blue-500/20">
                         Create the first post →
                     </button>
+                    <div className="pt-2">
+                        <button onClick={handleShareApp}
+                                className="text-sm text-[#A1A1AA] hover:text-white transition-colors underline underline-offset-4">
+                            or invite friends to join you →
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -1084,6 +1099,19 @@ export default function Home() {
                     <span className="text-lg font-bold tracking-tight" style={{letterSpacing:"-0.03em"}}>SwayNow</span>
                 </div>
                 <div className="flex items-center gap-2">
+                    {/* Share / invite */}
+                    <button
+                        onClick={handleShareApp}
+                        style={{ minHeight: 36, minWidth: 36 }}
+                        className="rounded-full flex items-center justify-center text-[#A1A1AA] hover:text-white transition-colors active:scale-95"
+                        aria-label="Invite friends"
+                    >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                        </svg>
+                    </button>
+
                     {/* Notification bell */}
                     <button
                         onClick={() => setNavTab("chats")}

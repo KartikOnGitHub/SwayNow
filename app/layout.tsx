@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import InstallPrompt from "@/app/components/InstallPrompt";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -78,6 +79,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body suppressHydrationWarning className="min-h-full flex flex-col bg-[#0B0B0F] text-white" style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}>
       {children}
+      <InstallPrompt />
       </body>
       </html>
   );
