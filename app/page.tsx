@@ -494,8 +494,30 @@ export default function Home() {
     }, []);
 
     useEffect(() => {
-        const unsub = onAuthStateChanged(auth, (u) => {
+        const unsub = onAuthStateChanged(auth, async (u) => {
             setUser(u);
+            if (u) {
+                // Auto-create user doc on first login so they show in admin
+                try {
+                    const { doc, setDoc, getDoc, serverTimestamp: st } = await import("firebase/firestore");
+                    const ref = doc(db, "users", u.uid);
+                    const snap = await getDoc(ref);
+                    if (!snap.exists()) {
+                        await setDoc(ref, {
+                            uid: u.uid,
+                            displayName: u.displayName ?? "Anonymous",
+                            email: u.email ?? "",
+                            photoURL: u.photoURL ?? null,
+                            age: null,
+                            gender: null,
+                            languages: [],
+                            bio: "",
+                            createdAt: st(),
+                            updatedAt: st(),
+                        });
+                    }
+                } catch (e) { console.warn("User doc create error:", e); }
+            }
             setLoading(false);
         });
         return () => unsub();
