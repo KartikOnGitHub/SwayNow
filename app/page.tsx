@@ -477,7 +477,7 @@ export default function Home() {
     const [acceptedChats, setAcceptedChats] = useState<JoinRequest[]>([]);
     const [pendingCount, setPendingCount]   = useState(0);
 
-    const [toast, setToast]             = useState<{ title: string; body: string; chatId?: string } | null>(null);
+    const [toast, setToast]             = useState<{ title: string; body: string; chatId?: string; route?: string } | null>(null);
     const [notifGranted, setNotifGranted] = useState(false);
 
     const [joinedPosts, setJoinedPosts]     = useState<Set<string>>(new Set());
@@ -529,8 +529,15 @@ export default function Home() {
         requestNotificationPermission(user.uid).then(setNotifGranted).catch(console.warn);
         // Listen for foreground push messages → show toast
         const unsub = onForegroundMessage((msg) => {
-            setToast({ title: msg.title, body: msg.body, chatId: msg.data?.chatId });
-            setTimeout(() => setToast(null), 5000);
+            const isJoinRequest = msg.type === "join_request";
+            const isAccepted    = msg.type === "request_accepted";
+            setToast({
+                title: msg.title,
+                body: msg.body,
+                chatId: isAccepted ? msg.data?.chatId : undefined,
+                route: isJoinRequest ? "/requests" : undefined,
+            });
+            setTimeout(() => setToast(null), 6000);
         });
         return () => { if (typeof unsub === "function") unsub(); };
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -586,7 +593,21 @@ export default function Home() {
                 return [...mine, ...newChats];
             });
         });
-        const unsub3 = onSnapshot(q3, (s) => setPendingCount(s.size));
+        const unsub3 = onSnapshot(q3, (s) => {
+            const newCount = s.size;
+            setPendingCount((prev) => {
+                // Show toast when a new request arrives
+                if (newCount > prev && prev >= 0) {
+                    setToast({
+                        title: "👋 New join request!",
+                        body: "Someone wants to join your post. Tap to review.",
+                        route: "/requests",
+                    });
+                    setTimeout(() => setToast(null), 6000);
+                }
+                return newCount;
+            });
+        });
         return () => { unsub1(); unsub2(); unsub3(); };
     }, [user]);
 
@@ -1141,7 +1162,7 @@ export default function Home() {
             {toast && (
                 <div
                     className="fixed top-4 left-4 right-4 z-50 max-w-sm mx-auto"
-                    onClick={() => { if (toast.chatId) router.push(`/chat/${toast.chatId}`); setToast(null); }}
+                    onClick={() => { if (toast.chatId) router.push(`/chat/${toast.chatId}`); else if (toast.route) router.push(toast.route); setToast(null); }}
                 >
                     <div className="bg-[#1a1a2e] border border-blue-500/30 rounded-2xl px-4 py-3 shadow-2xl flex items-start gap-3 cursor-pointer active:scale-[0.98] transition-all">
                         <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0 text-base mt-0.5">🔔</div>
