@@ -3,7 +3,7 @@ import { doc, setDoc, collection, addDoc, serverTimestamp } from "firebase/fires
 import { app, db } from "./firebase";
 
 // 🔧 Get this from Firebase Console → Project Settings → Cloud Messaging → Web Push certificates
-export const VAPID_KEY = "BOQ6a79v23DyfrGRV9VrpnMzsTFtsxZV_6jrMAnCy6ar21nNz8bFnmTEkpNZ_9WmrqI3S6S0zhbnWr7JC51DRLc";
+export const VAPID_KEY = "BB6CDni_kycOH9VbF8HU-4LN0mgy1VjWpAIKibFtUcymxGAf-LVgOZhv208SowkRN9ZB_fAetj2AM6XlhtopLd0";
 
 export type NotifType =
     | "join_request"

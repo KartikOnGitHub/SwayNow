@@ -48,7 +48,13 @@ export default function ChatPage() {
 	// Single effect that handles auth + verify together
 	useEffect(() => {
 		const unsub = onAuthStateChanged(auth, async (u) => {
-			if (!u) { router.push("/"); return; }
+			if (!u) {
+				// Wait a tick — on mobile Firebase needs time to restore session
+				setTimeout(() => {
+					if (!auth.currentUser) router.push("/");
+				}, 1500);
+				return;
+			}
 			setUser(u);
 
 			// Now verify immediately while we have the user

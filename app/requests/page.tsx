@@ -10,17 +10,22 @@ import { buildAcceptedNotif } from "@/lib/notifications";
 
 export default function RequestsPage() {
     const router = useRouter();
-    const [user, setUser]     = useState<User | null>(null);
+    const [user, setUser]       = useState<User | null>(null);
     const [loading, setLoading] = useState(true);
     const [pending, setPending] = useState<JoinRequest[]>([]);
     const [accepted, setAccepted] = useState<JoinRequest[]>([]);
-    const [acting, setActing] = useState<string | null>(null);
-    const [tab, setTab]       = useState<"requests" | "chats">("requests");
+    const [acting, setActing]   = useState<string | null>(null);
+    const [tab, setTab]         = useState<"requests" | "chats">("requests");
 
+    // Auth — only redirect AFTER loading is done
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, (u) => {
-            setUser(u); setLoading(false);
-            if (!u) router.push("/");
+            setLoading(false);
+            if (!u) {
+                router.push("/");
+                return;
+            }
+            setUser(u);
         });
         return () => unsub();
     }, [router]);
@@ -42,7 +47,7 @@ export default function RequestsPage() {
         });
     }, [user]);
 
-    // Accepted chats — both as sender and receiver
+    // Accepted chats — I am receiver
     useEffect(() => {
         if (!user) return;
         const q1 = query(collection(db, "requests"), where("receiverUserId", "==", user.uid), where("status", "==", "accepted"));
@@ -52,7 +57,6 @@ export default function RequestsPage() {
             const data = snap.docs.map((d) => ({ id: d.id, ...d.data() } as JoinRequest));
             setAccepted((prev) => {
                 const asSender = prev.filter((r) => r.senderUserId === user.uid);
-                // Deduplicate by id
                 const ids = new Set(asSender.map((r) => r.id));
                 return [...asSender, ...data.filter((r) => !ids.has(r.id))];
             });
@@ -93,44 +97,43 @@ export default function RequestsPage() {
         router.push(`/chat/${req.postId}_${req.senderUserId}`);
     };
 
-    // Get the name of the OTHER person in each chat
     const getOtherName = (req: JoinRequest): string => {
         if (!user) return "User";
-        // If I'm the sender, the other person is the receiver (post creator)
         if (user.uid === req.senderUserId) return req.receiverUserName ?? "User";
-        // If I'm the receiver, the other person is the sender
         return req.senderUserName ?? "User";
     };
 
     const fmt = (ts: Timestamp | null) =>
         ts ? new Date(ts.seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
+    // Show spinner while auth loads — never redirect prematurely
     if (loading) return (
         <main className="flex min-h-screen items-center justify-center bg-[#0B0B0F]">
             <div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
         </main>
     );
 
+    if (!user) return null;
+
     return (
         <main className="min-h-screen bg-[#0B0B0F] text-white">
-            {/* Header */}
             <header className="sticky top-0 z-10 bg-[#0B0B0F]/90 backdrop-blur-md border-b border-white/[0.06]">
                 <div className="flex items-center gap-3 px-4 py-3">
-                    <button onClick={() => router.push("/")}
-                            style={{ minHeight: 36 }}
+                    <button onClick={() => router.back()} style={{ minHeight: 36 }}
                             className="text-sm text-[#A1A1AA] hover:text-white transition-colors">
                         ← Back
                     </button>
                     <h1 className="text-base font-semibold">Inbox</h1>
                     {pending.length > 0 && (
-                        <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{pending.length}</span>
+                        <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+              {pending.length}
+            </span>
                     )}
                 </div>
-                {/* Tabs */}
                 <div className="flex px-4 gap-1 border-t border-white/[0.04]">
                     {(["requests", "chats"] as const).map((t) => (
                         <button key={t} onClick={() => setTab(t)}
-                                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                                className={`px-4 py-2.5 text-sm font-medium border-b-2 capitalize transition-colors whitespace-nowrap ${
                                     tab === t ? "border-blue-500 text-white" : "border-transparent text-[#52525B] hover:text-[#A1A1AA]"
                                 }`}>
                             {t === "requests"
@@ -143,7 +146,6 @@ export default function RequestsPage() {
 
             <div className="max-w-lg mx-auto px-4 py-4 space-y-3">
 
-                {/* ── Requests tab ── */}
                 {tab === "requests" && (
                     <>
                         {pending.length === 0 && (
@@ -172,22 +174,16 @@ export default function RequestsPage() {
                                     </div>
                                 )}
                                 <div className="flex gap-2">
-                                    <button
-                                        onClick={() => handleAccept(req)}
-                                        disabled={acting === req.id}
-                                        style={{ minHeight: 48 }}
-                                        className="flex-1 rounded-2xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                                    >
+                                    <button onClick={() => handleAccept(req)} disabled={acting === req.id}
+                                            style={{ minHeight: 48 }}
+                                            className="flex-1 rounded-2xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                                         {acting === req.id
                                             ? <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
                                             : "✓ Accept"}
                                     </button>
-                                    <button
-                                        onClick={() => handleReject(req)}
-                                        disabled={acting === req.id}
-                                        style={{ minHeight: 48 }}
-                                        className="flex-1 rounded-2xl border border-white/10 text-[#A1A1AA] text-sm font-medium hover:border-white/20 hover:text-white active:scale-[0.98] transition-all disabled:opacity-50"
-                                    >
+                                    <button onClick={() => handleReject(req)} disabled={acting === req.id}
+                                            style={{ minHeight: 48 }}
+                                            className="flex-1 rounded-2xl border border-white/10 text-[#A1A1AA] text-sm font-medium hover:border-white/20 hover:text-white active:scale-[0.98] transition-all disabled:opacity-50">
                                         ✕ Decline
                                     </button>
                                 </div>
@@ -196,7 +192,6 @@ export default function RequestsPage() {
                     </>
                 )}
 
-                {/* ── Chats tab ── */}
                 {tab === "chats" && (
                     <>
                         {accepted.length === 0 && (
