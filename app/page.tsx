@@ -841,20 +841,28 @@ export default function Home() {
                         </button>
                     </div>
                 )}
-                {acceptedChats.map((req) => (
-                    <button key={req.id} onClick={() => router.push(`/chat/${req.postId}_${req.senderUserId}`)}
-                            style={{ minHeight: 72 }}
-                            className="w-full flex items-center gap-3 bg-[#111118] border border-white/[0.06] rounded-2xl p-4 active:scale-[0.99] transition-all text-left">
-                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-base font-semibold text-white shrink-0">
-                            {req.senderUserName[0]?.toUpperCase()}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                            <p className="text-[15px] font-medium text-white truncate">{req.senderUserName}</p>
-                            <p className="text-xs text-[#A1A1AA] truncate mt-0.5">Re: {req.postText}</p>
-                        </div>
-                        <span className="text-xs bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-full font-semibold">Active</span>
-                    </button>
-                ))}
+                {acceptedChats.map((req) => {
+                    // Show the OTHER person's name — not always the sender
+                    const otherName = user?.uid === req.senderUserId
+                        ? (req.receiverUserName || "User")
+                        : req.senderUserName;
+                    // Chat URL always uses senderUserId (that's the key)
+                    const chatUrl = `/chat/${req.postId}_${req.senderUserId}`;
+                    return (
+                        <button key={req.id} onClick={() => router.push(chatUrl)}
+                                style={{ minHeight: 72 }}
+                                className="w-full flex items-center gap-3 bg-[#111118] border border-white/[0.06] rounded-2xl p-4 active:scale-[0.99] transition-all text-left">
+                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-base font-semibold text-white shrink-0">
+                                {otherName[0]?.toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-[15px] font-medium text-white truncate">{otherName}</p>
+                                <p className="text-xs text-[#A1A1AA] truncate mt-0.5">Re: {req.postText}</p>
+                            </div>
+                            <span className="text-xs bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-full font-semibold">Active</span>
+                        </button>
+                    );
+                })}
             </div>
         </div>
     );

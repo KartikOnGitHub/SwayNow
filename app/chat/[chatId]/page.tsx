@@ -62,15 +62,11 @@ export default function ChatPage() {
 	}, [router]);
 
 	// ── Verify access ──────────────────────────────────────
-	// Find the accepted request for this chatId.
-	// chatId = postId + "_" + senderUserId
-	// So we look for: postId matches AND senderUserId matches AND status = accepted
 	useEffect(() => {
 		if (!user || !postId || !senderUserId) return;
 
 		const verify = async () => {
 			try {
-				// Query only by postId + senderUserId — avoids composite index requirement
 				const snap = await getDocs(query(
 					collection(db, "requests"),
 					where("postId",       "==", postId),
@@ -78,43 +74,35 @@ export default function ChatPage() {
 				));
 
 				if (snap.empty) {
-					// No request at all — check if it was accepted via a different path
-					console.warn("No request found for this chat");
-					// Still allow if user is either participant (trust the URL)
+					// No request found — allow anyway if user is a participant (trust the URL)
+					if (user.uid === senderUserId) {
+						setOtherUserId("");
+						setOtherName("User");
+					}
 					setAuthorized(true);
-					setOtherUserId(user.uid === senderUserId ? "" : senderUserId);
 					return;
 				}
 
 				const req = snap.docs[0].data();
-
-				// Check it's accepted
-				if (req.status !== "accepted") {
-					// Request exists but not yet accepted — show waiting state
-					setAuthorized(false);
-					return;
-				}
-
-				setReceiverId(req.receiverUserId);
+				setReceiverId(req.receiverUserId ?? "");
 
 				if (user.uid === senderUserId) {
-					// I sent the request — other person is the receiver (post creator)
-					setOtherUserId(req.receiverUserId);
-					setOtherName(req.receiverUserName ?? "User");
+					setOtherUserId(req.receiverUserId ?? "");
+					setOtherName(req.receiverUserName || "User");
 				} else if (user.uid === req.receiverUserId) {
-					// I received the request — other person is the sender
 					setOtherUserId(senderUserId);
-					setOtherName(req.senderUserName ?? "User");
+					setOtherName(req.senderUserName || "User");
 				} else {
-					// Not a participant
+					// Not a participant — send home
 					router.push("/");
 					return;
 				}
 
+				// Allow chat regardless of status — show waiting message if pending
 				setAuthorized(true);
 			} catch (e) {
 				console.error("Chat verify error:", e);
-				// On error, still show chat — better than blocking
+				// On any error, allow access rather than blocking
 				setAuthorized(true);
 			}
 		};
@@ -199,14 +187,21 @@ export default function ChatPage() {
 		setTimeout(() => setShowFeedback(false), 1500);
 	};
 
-	// ── Loading state ──────────────────────────────────────
-	if (loading) return (
+	// ── Loading state — covers both auth loading and verify ──
+	if (loading || (!authorized && !chatId)) return (
 		<main className="flex min-h-screen items-center justify-center bg-[#0B0B0F]">
 			<div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
 		</main>
 	);
 
-	// Not accepted yet
+	// Still verifying (authorized starts false, verify sets it true)
+	if (!authorized && user && postId) return (
+		<main className="flex min-h-screen items-center justify-center bg-[#0B0B0F]">
+			<div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+		</main>
+	);
+
+	// Not accepted yet (shouldn't reach here with new verify logic, kept as fallback)
 	if (!authorized) return (
 		<main className="flex min-h-screen items-center justify-center bg-[#0B0B0F] px-6">
 			<div className="text-center space-y-4 max-w-xs">
