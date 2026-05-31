@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Terms of Service",
-  description: "The rules and agreements for using Sway.",
+  description: "The rules and agreements for using SwayNowNow.",
 };
 
 export default function TermsLayout({ children }: { children: React.ReactNode }) {

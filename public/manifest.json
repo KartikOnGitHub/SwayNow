@@ -1,6 +1,6 @@
 {
-  "name": "Sway",
-  "short_name": "Sway",
+  "name": "SwayNow",
+  "short_name": "SwayNow",
   "description": "Find your people, anywhere",
   "start_url": "/",
   "display": "standalone",

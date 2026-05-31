@@ -19,11 +19,11 @@ export default function PrivacyPage() {
                 </div>
 
                 <Section title="1. Introduction">
-                    Welcome to Sway. This Privacy Policy explains how we collect, use, and protect your personal information when you use our service. By using Sway, you agree to the collection and use of information in accordance with this policy.
+                    Welcome to SwayNow. This Privacy Policy explains how we collect, use, and protect your personal information when you use our service. By using SwayNow, you agree to the collection and use of information in accordance with this policy.
                 </Section>
 
                 <Section title="2. Information We Collect">
-                    <p className="mb-3">We collect the following information when you use Sway:</p>
+                    <p className="mb-3">We collect the following information when you use SwayNow:</p>
                     <ul className="space-y-2 list-disc pl-5 marker:text-neutral-600">
                         <li><strong className="text-white">Account information:</strong> name, email address, profile photo (provided via Google Sign-In).</li>
                         <li><strong className="text-white">Location data:</strong> GPS coordinates (latitude and longitude) when you create or browse posts. Used to show nearby content within a 5 km radius.</li>
@@ -43,11 +43,11 @@ export default function PrivacyPage() {
                 </Section>
 
                 <Section title="4. Location Data">
-                    Sway requires access to your device&apos;s location to function. Your precise GPS coordinates are stored only with posts you create, and only used to calculate distance to other users for the duration of the post (max 4 hours). You can revoke location access at any time via your browser settings.
+                    SwayNow requires access to your device&apos;s location to function. Your precise GPS coordinates are stored only with posts you create, and only used to calculate distance to other users for the duration of the post (max 4 hours). You can revoke location access at any time via your browser settings.
                 </Section>
 
                 <Section title="5. Public Information">
-                    The following information is visible to other Sway users:
+                    The following information is visible to other SwayNow users:
                     <ul className="space-y-1 list-disc pl-5 mt-3 marker:text-neutral-600">
                         <li>Your display name and profile photo</li>
                         <li>Posts you create (text, intent, city, location, expiry)</li>
@@ -87,7 +87,7 @@ export default function PrivacyPage() {
                 </Section>
 
                 <Section title="10. Children's Privacy">
-                    Sway is not intended for users under 16 years of age. We do not knowingly collect personal information from children. If you believe a minor has created an account, please contact us immediately.
+                    SwayNow is not intended for users under 16 years of age. We do not knowingly collect personal information from children. If you believe a minor has created an account, please contact us immediately.
                 </Section>
 
                 <Section title="11. Cookies and Tracking">
@@ -108,7 +108,7 @@ export default function PrivacyPage() {
                 </Section>
 
                 <div className="pt-6 border-t border-white/5 text-xs text-neutral-600">
-                    By using Sway, you acknowledge that you have read and understood this Privacy Policy.
+                    By using SwayNow, you acknowledge that you have read and understood this Privacy Policy.
                 </div>
             </div>
         </main>

@@ -9,7 +9,7 @@ const inter = Inter({
   display: "swap",
 });
 
-const SITE_URL = "https://swaynow.app";
+const SITE_URL = "https://swaynow.eu";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
