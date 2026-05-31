@@ -45,16 +45,11 @@ export default function ChatPage() {
 	const [reviewText, setReviewText]   = useState("");
 	const bottomRef = useRef<HTMLDivElement>(null);
 
-	// Single effect that handles auth + verify together
+	// Single effect — uses authStateReady so mobile session is fully loaded first
 	useEffect(() => {
-		const unsub = onAuthStateChanged(auth, async (u) => {
-			if (!u) {
-				// Wait a tick — on mobile Firebase needs time to restore session
-				setTimeout(() => {
-					if (!auth.currentUser) router.push("/");
-				}, 1500);
-				return;
-			}
+		auth.authStateReady().then(async () => {
+			const u = auth.currentUser;
+			if (!u) { router.push("/"); return; }
 			setUser(u);
 
 			// Now verify immediately while we have the user
@@ -90,7 +85,6 @@ export default function ChatPage() {
 
 			setReady(true);
 		});
-		return () => unsub();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [postId, senderUserId]);
 

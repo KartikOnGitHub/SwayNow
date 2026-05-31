@@ -10,25 +10,33 @@ import { buildAcceptedNotif } from "@/lib/notifications";
 
 export default function RequestsPage() {
     const router = useRouter();
-    const [user, setUser]       = useState<User | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [pending, setPending] = useState<JoinRequest[]>([]);
+    const [user, setUser]         = useState<User | null>(null);
+    const [authReady, setAuthReady] = useState(false);
+    const [pending, setPending]   = useState<JoinRequest[]>([]);
     const [accepted, setAccepted] = useState<JoinRequest[]>([]);
-    const [acting, setActing]   = useState<string | null>(null);
-    const [tab, setTab]         = useState<"requests" | "chats">("requests");
+    const [acting, setActing]     = useState<string | null>(null);
+    const [tab, setTab]           = useState<"requests" | "chats">("requests");
 
-    // Auth — only redirect AFTER loading is done
     useEffect(() => {
-        const unsub = onAuthStateChanged(auth, (u) => {
-            setLoading(false);
-            if (!u) {
+        // authStateReady resolves once Firebase has fully loaded the session
+        // This is the correct way to handle mobile where session restore is slow
+        auth.authStateReady().then(() => {
+            const currentUser = auth.currentUser;
+            if (!currentUser) {
                 router.push("/");
                 return;
             }
-            setUser(u);
+            setUser(currentUser);
+            setAuthReady(true);
+        });
+
+        // Also listen for changes (logout etc)
+        const unsub = onAuthStateChanged(auth, (u) => {
+            if (authReady && !u) router.push("/");
         });
         return () => unsub();
-    }, [router]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Pending requests sent TO me
     useEffect(() => {
@@ -47,12 +55,11 @@ export default function RequestsPage() {
         });
     }, [user]);
 
-    // Accepted chats — I am receiver
+    // Accepted chats
     useEffect(() => {
         if (!user) return;
         const q1 = query(collection(db, "requests"), where("receiverUserId", "==", user.uid), where("status", "==", "accepted"));
         const q2 = query(collection(db, "requests"), where("senderUserId",   "==", user.uid), where("status", "==", "accepted"));
-
         const unsub1 = onSnapshot(q1, (snap) => {
             const data = snap.docs.map((d) => ({ id: d.id, ...d.data() } as JoinRequest));
             setAccepted((prev) => {
@@ -77,11 +84,8 @@ export default function RequestsPage() {
         try {
             await acceptRequest(req.id);
             buildAcceptedNotif(
-                req.senderUserId,
-                req.receiverUserId,
-                user?.displayName ?? "Someone",
-                req.postId,
-                req.senderUserId,
+                req.senderUserId, req.receiverUserId,
+                user?.displayName ?? "Someone", req.postId, req.senderUserId,
             ).catch(console.warn);
             router.push(`/chat/${req.postId}_${req.senderUserId}`);
         } finally { setActing(null); }
@@ -106,28 +110,21 @@ export default function RequestsPage() {
     const fmt = (ts: Timestamp | null) =>
         ts ? new Date(ts.seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
-    // Show spinner while auth loads — never redirect prematurely
-    if (loading) return (
+    if (!authReady) return (
         <main className="flex min-h-screen items-center justify-center bg-[#0B0B0F]">
             <div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
         </main>
     );
-
-    if (!user) return null;
 
     return (
         <main className="min-h-screen bg-[#0B0B0F] text-white">
             <header className="sticky top-0 z-10 bg-[#0B0B0F]/90 backdrop-blur-md border-b border-white/[0.06]">
                 <div className="flex items-center gap-3 px-4 py-3">
                     <button onClick={() => router.back()} style={{ minHeight: 36 }}
-                            className="text-sm text-[#A1A1AA] hover:text-white transition-colors">
-                        ← Back
-                    </button>
+                            className="text-sm text-[#A1A1AA] hover:text-white transition-colors">← Back</button>
                     <h1 className="text-base font-semibold">Inbox</h1>
                     {pending.length > 0 && (
-                        <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-              {pending.length}
-            </span>
+                        <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{pending.length}</span>
                     )}
                 </div>
                 <div className="flex px-4 gap-1 border-t border-white/[0.04]">
@@ -145,7 +142,6 @@ export default function RequestsPage() {
             </header>
 
             <div className="max-w-lg mx-auto px-4 py-4 space-y-3">
-
                 {tab === "requests" && (
                     <>
                         {pending.length === 0 && (
@@ -168,9 +164,7 @@ export default function RequestsPage() {
                                 </div>
                                 {req.postText && (
                                     <div className="bg-[#0B0B0F] border border-white/[0.04] rounded-xl px-3 py-2.5">
-                                        <p className="text-xs text-[#A1A1AA] leading-relaxed line-clamp-2">
-                                            &quot;{req.postText}&quot;
-                                        </p>
+                                        <p className="text-xs text-[#A1A1AA] leading-relaxed line-clamp-2">&quot;{req.postText}&quot;</p>
                                     </div>
                                 )}
                                 <div className="flex gap-2">
@@ -214,9 +208,7 @@ export default function RequestsPage() {
                                         <p className="text-[15px] font-semibold text-white">{otherName}</p>
                                         <p className="text-xs text-[#A1A1AA] truncate mt-0.5">Re: {req.postText}</p>
                                     </div>
-                                    <span className="text-xs bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-full font-semibold shrink-0">
-                    Active
-                  </span>
+                                    <span className="text-xs bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-full font-semibold shrink-0">Active</span>
                                 </button>
                             );
                         })}
