@@ -620,7 +620,7 @@ export default function Home() {
             }
 
             // Send request
-            await sendJoinRequest(post.id, post.text, user.uid, user.displayName ?? "Anonymous", post.userId);
+            await sendJoinRequest(post.id, post.text, user.uid, user.displayName ?? "Anonymous", post.userId, post.userName);
             setJoinedPosts((prev) => new Set(prev).add(post.id));
             setPostActionMsg((prev) => ({ ...prev, [post.id]: "✓ Request sent! They'll be notified." }));
             setTimeout(() => setPostActionMsg((prev) => { const n = { ...prev }; delete n[post.id]; return n; }), 4000);

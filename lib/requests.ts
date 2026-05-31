@@ -25,6 +25,7 @@ export interface JoinRequest {
     senderUserId: string;
     senderUserName: string;
     receiverUserId: string;
+    receiverUserName?: string;   // post creator's name — stored on create
     status: RequestStatus;
     createdAt: Timestamp | null;
 }
@@ -52,7 +53,8 @@ export async function sendJoinRequest(
     postText: string,
     senderUserId: string,
     senderUserName: string,
-    receiverUserId: string
+    receiverUserId: string,
+    receiverUserName?: string
 ): Promise<void> {
     const existing = await getDocs(query(
         collection(db, "requests"),
@@ -67,6 +69,7 @@ export async function sendJoinRequest(
         senderUserId,
         senderUserName,
         receiverUserId,
+        receiverUserName: receiverUserName ?? "",
         status: "pending",
         createdAt: serverTimestamp(),
     });
