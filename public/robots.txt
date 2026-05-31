@@ -1,7 +1,13 @@
 User-agent: *
 Allow: /
+Allow: /legal/
 Disallow: /chat/
 Disallow: /requests/
-Disallow: /profile/
+Disallow: /admin/
+Disallow: /notifications/
+Disallow: /onboarding/
 
-Sitemap: https://sway.app/sitemap.xml
+# Allow profile pages to be indexed — builds trust signals
+Allow: /profile/
+
+Sitemap: https://swaynow.eu/sitemap.xml
