@@ -10,7 +10,7 @@ import {
 import { auth, db } from "@/lib/firebase";
 
 // 🔧 Add your Firebase UID here to protect the dashboard
-const ADMIN_UIDS = ["879P4czSTUatdIdLYIFtMvYt2qE2"];
+const ADMIN_UIDS = ["YOUR_UID_HERE"];
 
 interface Stats {
     totalUsers: number;
@@ -59,18 +59,18 @@ export default function AdminDashboard() {
     const [activeTab, setActiveTab] = useState<"overview" | "users" | "posts" | "cities">("overview");
 
     useEffect(() => {
-        const unsub = onAuthStateChanged(auth, async (u) => {
-            if (!u) { router.push("/"); return; }
-            // Check if admin
+        // Use authStateReady for reliable mobile auth
+        auth.authStateReady().then(async () => {
+            const u = auth.currentUser;
+            if (!u) { router.push("/app"); return; }
             if (!ADMIN_UIDS.includes(u.uid) && ADMIN_UIDS[0] !== "YOUR_UID_HERE") {
-                router.push("/");
+                router.push("/app");
                 return;
             }
             setAllowed(true);
             await loadData();
             setLoading(false);
         });
-        return () => unsub();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -192,7 +192,7 @@ export default function AdminDashboard() {
             {/* Header */}
             <header className="sticky top-0 z-20 flex items-center justify-between px-5 py-4 bg-[#0B0B0F]/90 backdrop-blur-md border-b border-white/[0.06]">
                 <div className="flex items-center gap-3">
-                    <button onClick={() => router.push("/")} className="text-sm text-[#A1A1AA] hover:text-white transition-colors">← App</button>
+                    <button onClick={() => router.push("/app")} className="text-sm text-[#A1A1AA] hover:text-white transition-colors">← App</button>
                     <div className="w-px h-4 bg-white/10" />
                     <h1 className="text-base font-bold">SwayNow Admin</h1>
                 </div>
