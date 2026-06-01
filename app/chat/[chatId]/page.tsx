@@ -8,7 +8,7 @@ import {
 	onSnapshot, serverTimestamp, Timestamp, getDocs,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { blockUser, reportUser, saveInteraction, ReportReason, isUserBlocked } from "@/lib/requests";
+import { blockUser, reportUser, saveInteraction, ReportReason, isBlockedEitherWay } from "@/lib/requests";
 import { buildMessageNotif } from "@/lib/notifications";
 
 interface Message {
@@ -36,7 +36,7 @@ export default function ChatPage() {
 	const [messages, setMessages]       = useState<Message[]>([]);
 	const [text, setText]               = useState("");
 	const [sending, setSending]         = useState(false);
-	const [isBlocked, setIsBlocked]     = useState(false);
+	const [blockState, setBlockState]   = useState<{ blocked: boolean; iBlockedThem: boolean; theyBlockedMe: boolean }>({ blocked: false, iBlockedThem: false, theyBlockedMe: false });
 	const [showMenu, setShowMenu]       = useState(false);
 	const [showReport, setShowReport]   = useState(false);
 	const [reportReason, setReportReason] = useState<ReportReason>("spam");
@@ -53,6 +53,8 @@ export default function ChatPage() {
 			if (!u) { router.push("/app"); return; }
 			setUser(u);
 
+			let resolvedOtherId = "";
+
 			// Now verify immediately while we have the user
 			try {
 				const snap = await getDocs(query(
@@ -64,19 +66,17 @@ export default function ChatPage() {
 				if (!snap.empty) {
 					const req = snap.docs[0].data();
 					if (u.uid === senderUserId) {
-						// I sent the request — other person is post creator
-						setOtherUserId(req.receiverUserId ?? "");
-						setOtherName(req.receiverUserName || req.receiverUserId?.slice(0,6) || "");
+						resolvedOtherId = req.receiverUserId ?? "";
+						setOtherUserId(resolvedOtherId);
+						setOtherName(req.receiverUserName || resolvedOtherId.slice(0,6) || "");
 					} else {
-						// I am the post creator — other person is the sender
-						setOtherUserId(senderUserId);
+						resolvedOtherId = senderUserId;
+						setOtherUserId(resolvedOtherId);
 						setOtherName(req.senderUserName || senderUserId.slice(0,6) || "");
 					}
 				} else {
-					// No request found — set other user based on URL
-					if (u.uid === senderUserId) {
-						setOtherUserId(""); // receiver unknown without request doc
-					} else {
+					if (u.uid !== senderUserId) {
+						resolvedOtherId = senderUserId;
 						setOtherUserId(senderUserId);
 					}
 				}
@@ -84,10 +84,12 @@ export default function ChatPage() {
 				console.error("Verify error:", e);
 			}
 
-			// Check if either party has blocked the other
-			if (u && auth.currentUser) {
-				const blocked = await isUserBlocked(u.uid, otherUserId || senderUserId).catch(() => false);
-				setIsBlocked(blocked as boolean);
+			// Check if EITHER party blocked the other (bidirectional)
+			if (resolvedOtherId) {
+				try {
+					const result = await isBlockedEitherWay(u.uid, resolvedOtherId);
+					setBlockState(result);
+				} catch { /* allow on error */ }
 			}
 
 			setReady(true);
@@ -126,7 +128,7 @@ export default function ChatPage() {
 	}, [chatId, ready]);
 
 	const handleSend = async () => {
-		if (!user || !text.trim() || sending || isBlocked) return;
+		if (!user || !text.trim() || sending || blockState.blocked) return;
 		setSending(true);
 		const msgText = text.trim();
 		setText("");
@@ -154,7 +156,7 @@ export default function ChatPage() {
 	const handleBlock = async () => {
 		if (!user || !otherUserId) return;
 		await blockUser(user.uid, otherUserId, otherName || "User");
-		setIsBlocked(true);
+		setBlockState({ blocked: true, iBlockedThem: true, theyBlockedMe: false });
 		setActionMsg("User blocked. They can no longer message you.");
 		setShowMenu(false);
 	};
@@ -266,8 +268,13 @@ export default function ChatPage() {
 				<div ref={bottomRef} />
 			</div>
 
-			{/* Input — disabled if blocked */}
-			{isBlocked ? (
+			{/* Input — disabled if blocked (either direction) */}
+			{blockState.theyBlockedMe ? (
+				<div className="shrink-0 border-t border-white/[0.06] px-4 py-5 bg-[#0B0B0F] text-center"
+				     style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 20px)" }}>
+					<p className="text-sm text-[#52525B]">You can no longer message this person.</p>
+				</div>
+			) : blockState.iBlockedThem ? (
 				<div className="shrink-0 border-t border-white/[0.06] px-4 py-4 bg-[#0B0B0F] text-center"
 				     style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 16px)" }}>
 					<p className="text-sm text-[#52525B]">🚫 You have blocked this user</p>
@@ -276,7 +283,7 @@ export default function ChatPage() {
 							if (!user || !otherUserId) return;
 							const { unblockUser } = await import("@/lib/requests");
 							await unblockUser(user.uid, otherUserId);
-							setIsBlocked(false);
+							setBlockState({ blocked: false, iBlockedThem: false, theyBlockedMe: false });
 							setActionMsg("User unblocked.");
 						}}
 						className="mt-2 text-xs text-blue-400 underline hover:text-blue-300 transition-colors"

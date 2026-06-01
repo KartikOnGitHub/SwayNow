@@ -163,6 +163,22 @@ export async function isUserBlocked(
     return !snap.empty;
 }
 
+// Checks if EITHER user blocked the other — used in chat to fully prevent messaging
+export async function isBlockedEitherWay(
+    userA: string,
+    userB: string
+): Promise<{ blocked: boolean; iBlockedThem: boolean; theyBlockedMe: boolean }> {
+    const [aBlockedB, bBlockedA] = await Promise.all([
+        getDocs(query(collection(db, "blocks"),
+            where("blockedBy", "==", userA), where("blockedUserId", "==", userB))),
+        getDocs(query(collection(db, "blocks"),
+            where("blockedBy", "==", userB), where("blockedUserId", "==", userA))),
+    ]);
+    const iBlockedThem = !aBlockedB.empty;
+    const theyBlockedMe = !bBlockedA.empty;
+    return { blocked: iBlockedThem || theyBlockedMe, iBlockedThem, theyBlockedMe };
+}
+
 export async function unblockUser(
     currentUserId: string,
     targetUserId: string

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged, User } from "firebase/auth";
+import { User } from "firebase/auth";
 import {
     collection, query, where, orderBy,
     onSnapshot, updateDoc, doc, Timestamp,
@@ -26,11 +26,11 @@ export default function NotificationsPage() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const unsub = onAuthStateChanged(auth, (u) => {
+        auth.authStateReady().then(() => {
+            const u = auth.currentUser;
+            if (!u) { router.push("/app"); return; }
             setUser(u);
-            if (!u) router.push("/app");
         });
-        return () => unsub();
     }, [router]);
 
     useEffect(() => {
@@ -41,14 +41,24 @@ export default function NotificationsPage() {
             orderBy("createdAt", "desc")
         );
         const unsub = onSnapshot(q, (snap) => {
-            setNotifs(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Notif)));
+            const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Notif));
+            setNotifs(list);
             setLoading(false);
+            // Mark all unread as read shortly after viewing (clears the bell badge)
+            const unread = list.filter((n) => !n.read);
+            if (unread.length > 0) {
+                setTimeout(() => {
+                    unread.forEach((n) => {
+                        updateDoc(doc(db, "notifications", n.id), { read: true }).catch(() => {});
+                    });
+                }, 1500);
+            }
         });
         return () => unsub();
     }, [user]);
 
     const markRead = async (id: string) => {
-        await updateDoc(doc(db, "notifications", id), { read: true });
+        await updateDoc(doc(db, "notifications", id), { read: true }).catch(() => {});
     };
 
     const handleTap = (notif: Notif) => {

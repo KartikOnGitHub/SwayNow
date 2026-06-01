@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import {
@@ -475,7 +475,12 @@ export default function Home() {
     const [filterCity, setFilterCity]       = useState("Berlin");
 
     const [acceptedChats, setAcceptedChats] = useState<JoinRequest[]>([]);
+    const notifiedAcceptIds = useRef<Set<string>>(new Set());
+    const acceptInitDone = useRef(false);
+    const pendingInitDone = useRef(false);
     const [pendingCount, setPendingCount]   = useState(0);
+    const [unreadNotifs, setUnreadNotifs]   = useState(0);
+    const notifInitDone = useRef(false);
 
     const [toast, setToast]             = useState<{ title: string; body: string; chatId?: string; route?: string } | null>(null);
     const [notifGranted, setNotifGranted] = useState(false);
@@ -582,29 +587,39 @@ export default function Home() {
         });
         const unsub2 = onSnapshot(q2, (s) => {
             const newChats = s.docs.map((d) => ({ id: d.id, ...d.data() } as JoinRequest));
-            setAcceptedChats((prev) => {
-                // Show toast for newly accepted requests (not on initial load)
-                const prevIds = new Set(prev.map((r) => r.id));
-                const brandNew = newChats.filter((r) => !prevIds.has(r.id));
-                if (brandNew.length > 0 && prev.length > 0) {
-                    const req = brandNew[0];
-                    const chatId = `${req.postId}_${user.uid}`;
+
+            if (!acceptInitDone.current) {
+                // First load — record all existing as already-seen, don't notify
+                newChats.forEach((r) => notifiedAcceptIds.current.add(r.id));
+                acceptInitDone.current = true;
+            } else {
+                // Only notify for acceptances we've never seen before
+                const fresh = newChats.find((r) => !notifiedAcceptIds.current.has(r.id));
+                if (fresh) {
+                    notifiedAcceptIds.current.add(fresh.id);
                     setToast({
                         title: "Your request was accepted!",
-                        body: `Tap to open chat now`,
-                        chatId,
+                        body: "Tap to open chat now",
+                        chatId: `${fresh.postId}_${user.uid}`,
                     });
                     setTimeout(() => setToast(null), 6000);
                 }
+            }
+
+            setAcceptedChats((prev) => {
                 const mine = prev.filter((r) => r.receiverUserId === user.uid);
                 return [...mine, ...newChats];
             });
         });
         const unsub3 = onSnapshot(q3, (s) => {
             const newCount = s.size;
+            if (!pendingInitDone.current) {
+                pendingInitDone.current = true;
+                setPendingCount(newCount);
+                return;
+            }
             setPendingCount((prev) => {
-                // Show toast when a new request arrives
-                if (newCount > prev && prev >= 0) {
+                if (newCount > prev) {
                     setToast({
                         title: "👋 New join request!",
                         body: "Someone wants to join your post. Tap to review.",
@@ -616,6 +631,44 @@ export default function Home() {
             });
         });
         return () => { unsub1(); unsub2(); unsub3(); };
+    }, [user]);
+
+    // ── Live notifications (messages, accepts, requests) ────
+    useEffect(() => {
+        if (!user) return;
+        const notifQ = query(
+            collection(db, "notifications"),
+            where("toUserId", "==", user.uid),
+        );
+        const unsub = onSnapshot(notifQ, (s) => {
+            const all = s.docs.map((d) => ({ id: d.id, ...d.data() }) as { id: string; read?: boolean; type?: string; title?: string; body?: string; data?: { chatId?: string }; createdAt?: { seconds: number } });
+            const unread = all.filter((n) => !n.read);
+            setUnreadNotifs(unread.length);
+
+            if (!notifInitDone.current) {
+                notifInitDone.current = true;
+                return;
+            }
+
+            // Find newest unread message notification to toast
+            const newestMsg = all
+                .filter((n) => n.type === "new_message" && !n.read)
+                .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0))[0];
+
+            if (newestMsg && newestMsg.createdAt) {
+                const ageSeconds = Date.now() / 1000 - newestMsg.createdAt.seconds;
+                // Only toast for genuinely recent messages (last 30s)
+                if (ageSeconds < 30) {
+                    setToast({
+                        title: `💬 ${newestMsg.title}`,
+                        body: newestMsg.body ?? "New message",
+                        chatId: newestMsg.data?.chatId,
+                    });
+                    setTimeout(() => setToast(null), 6000);
+                }
+            }
+        });
+        return () => unsub();
     }, [user]);
 
     // ── Derived ────────────────────────────────────────────
@@ -1200,7 +1253,7 @@ export default function Home() {
 
                     {/* Notification bell */}
                     <button
-                        onClick={() => setNavTab("chats")}
+                        onClick={() => router.push("/notifications")}
                         style={{ minHeight: 36, minWidth: 36 }}
                         className="relative rounded-full flex items-center justify-center text-[#A1A1AA] hover:text-white transition-colors active:scale-95"
                     >
@@ -1208,9 +1261,9 @@ export default function Home() {
                             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                             <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
                         </svg>
-                        {pendingCount > 0 && (
+                        {unreadNotifs > 0 && (
                             <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold text-white border-2 border-[#0B0B0F]">
-                {pendingCount > 9 ? "9+" : pendingCount}
+                {unreadNotifs > 9 ? "9+" : unreadNotifs}
               </span>
                         )}
                     </button>
