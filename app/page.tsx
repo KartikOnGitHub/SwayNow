@@ -1,1299 +1,480 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import Image from "next/image";
-import {
-    GoogleAuthProvider, signInWithPopup, signOut,
-    onAuthStateChanged, User,
-} from "firebase/auth";
-import {
-    collection, addDoc, query, orderBy, where,
-    onSnapshot, serverTimestamp, Timestamp,
-} from "firebase/firestore";
-import { auth, db } from "../lib/firebase";
-import { getDistanceKm, formatDistance } from "../lib/distance";
-import {
-    sendJoinRequest, getAcceptedRequest, getPendingRequestId,
-    blockUser, unblockUser, reportUser, getTrustScore, TrustScore, ReportReason, JoinRequest, getBlockedUserIds,
-} from "../lib/requests";
-import { Duration, DURATIONS, getExpiresAt, isActive, timeRemaining, lifeFraction } from "../lib/expiry";
-import { requestNotificationPermission, onForegroundMessage } from "../lib/notifications";
-import { shareApp } from "../lib/share";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 
-
-// ── Types ──────────────────────────────────────────────────
-type Intent = "Explore" | "Party" | "Chill" | "Study" | "Sports";
-type NavTab = "feed" | "explore" | "post" | "chats" | "profile";
-
-interface Post {
-    id: string; text: string; intent: Intent;
-    userId: string; userName: string;
-    createdAt: Timestamp | null; expiresAt: Timestamp;
-    latitude: number; longitude: number; city: string;
-}
-interface NearbyPost extends Post { distanceKm: number; }
-
-// ── Constants ──────────────────────────────────────────────
-const RADIUS_KM = 5;
-
-const LOCATIONS: Record<string, string[]> = {
-    "🇩🇪 Germany":["Berlin","Munich","Hamburg","Frankfurt","Cologne","Stuttgart","Düsseldorf"],
-    "🇬🇧 UK":["London","Manchester","Edinburgh","Birmingham","Bristol","Glasgow","Liverpool"],
-    "🇫🇷 France":["Paris","Lyon","Nice","Marseille","Bordeaux","Toulouse"],
-    "🇳🇱 Netherlands":["Amsterdam","Rotterdam","The Hague","Utrecht","Eindhoven"],
-    "🇪🇸 Spain":["Barcelona","Madrid","Ibiza","Valencia","Seville","Malaga"],
-    "🇮🇹 Italy":["Rome","Milan","Florence","Venice","Naples","Turin"],
-    "🇵🇹 Portugal":["Lisbon","Porto","Faro","Madeira"],
-    "🇬🇷 Greece":["Athens","Mykonos","Santorini","Crete"],
-    "🇨🇭 Switzerland":["Zurich","Geneva","Basel","Lausanne"],
-    "🇦🇹 Austria":["Vienna","Salzburg","Innsbruck"],
-    "🇸🇪 Sweden":["Stockholm","Gothenburg","Malmö"],
-    "🇳🇴 Norway":["Oslo","Bergen","Tromsø"],
-    "🇩🇰 Denmark":["Copenhagen","Aarhus"],
-    "🇵🇱 Poland":["Warsaw","Kraków","Wrocław","Gdańsk"],
-    "🇨🇿 Czechia":["Prague","Brno"],
-    "🇭🇺 Hungary":["Budapest"],
-    "🇹🇷 Turkey":["Istanbul","Antalya","Bodrum"],
-    "🇺🇸 USA":["New York","Los Angeles","Miami","San Francisco","Chicago","Las Vegas","Austin","Seattle","Boston"],
-    "🇨🇦 Canada":["Toronto","Vancouver","Montreal","Calgary"],
-    "🇲🇽 Mexico":["Mexico City","Cancún","Tulum","Oaxaca"],
-    "🇧🇷 Brazil":["São Paulo","Rio de Janeiro","Florianópolis"],
-    "🇦🇷 Argentina":["Buenos Aires","Mendoza"],
-    "🇨🇴 Colombia":["Bogotá","Medellín","Cartagena"],
-    "🇯🇵 Japan":["Tokyo","Osaka","Kyoto","Sapporo"],
-    "🇰🇷 South Korea":["Seoul","Busan","Jeju"],
-    "🇨🇳 China":["Shanghai","Beijing","Chengdu"],
-    "🇸🇬 Singapore":["Singapore"],
-    "🇻🇳 Vietnam":["Hanoi","Ho Chi Minh City","Da Nang","Hoi An"],
-    "🇹🇭 Thailand":["Bangkok","Chiang Mai","Phuket","Koh Samui"],
-    "🇲🇾 Malaysia":["Kuala Lumpur","Penang"],
-    "🇮🇩 Indonesia":["Bali","Jakarta","Yogyakarta","Lombok"],
-    "🇵🇭 Philippines":["Manila","Cebu","Boracay","Palawan"],
-    "🇮🇳 India":["Delhi","Mumbai","Bangalore","Goa","Jaipur","Chennai","Hyderabad","Kolkata","Pune"],
-    "🇦🇪 UAE":["Dubai","Abu Dhabi"],
-    "🇿🇦 South Africa":["Cape Town","Johannesburg"],
-    "🇪🇬 Egypt":["Cairo","Hurghada","Sharm El-Sheikh"],
-    "🇲🇦 Morocco":["Marrakech","Casablanca","Fes"],
-    "🇦🇺 Australia":["Sydney","Melbourne","Brisbane","Perth"],
-    "🇳🇿 New Zealand":["Auckland","Wellington","Queenstown"],
-};
-
-// Brand colour tokens (Primary blue #3B82F6)
-const INTENTS: { value: Intent; emoji: string; label: string; tint: string; text: string }[] = [
-    { value:"Explore", emoji:"🧭", label:"Explore", tint:"bg-sky-500/12 border-sky-500/25",       text:"text-sky-400" },
-    { value:"Party",   emoji:"🎉", label:"Party",   tint:"bg-pink-500/12 border-pink-500/25",     text:"text-pink-400" },
-    { value:"Chill",   emoji:"🌿", label:"Chill",   tint:"bg-emerald-500/12 border-emerald-500/25", text:"text-emerald-400" },
-    { value:"Study",   emoji:"📚", label:"Study",   tint:"bg-amber-500/12 border-amber-500/25",   text:"text-amber-400" },
-    { value:"Sports",  emoji:"⚡", label:"Sports",  tint:"bg-orange-500/12 border-orange-500/25", text:"text-orange-400" },
-];
-function getIntentStyle(v: Intent) { return INTENTS.find((i) => i.value === v) ?? INTENTS[0]; }
-
-// ── Nav Icons ──────────────────────────────────────────────
-const NavIcons = {
-    feed: (filled?: boolean) => (
-        <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
-            <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-            <polyline points="9 22 9 12 15 12 15 22" fill="none" stroke="currentColor" strokeWidth={1.8}/>
-        </svg>
-    ),
-    explore: (filled?: boolean) => (
-        <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
-            <circle cx="12" cy="12" r="10" fill="none"/>
-            <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
-        </svg>
-    ),
-    post: () => (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
-            <line x1="12" y1="5" x2="12" y2="19"/>
-            <line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-    ),
-    chats: (filled?: boolean) => (
-        <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-    ),
-    profile: (filled?: boolean) => (
-        <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4" fill={filled ? "currentColor" : "none"}/>
-        </svg>
-    ),
-};
-
-// ════════════════════════════════════════════════════════════
-//  POST CARD — outside Home for stable identity
-// ════════════════════════════════════════════════════════════
-
-interface PostCardProps {
-    post: NearbyPost;
-    currentUserId: string;
-    joinedPosts: Set<string>;
-    actingPost: string | null;
-    trustScores: Record<string, TrustScore>;
-    reportingPost: string | null;
-    reportReason: ReportReason;
-    postActionMsg: Record<string, string>;
-    acceptedPostIds: Set<string>;
-    onJoin: (post: NearbyPost) => void;
-    onBlock: (uid: string, name: string) => void;
-    onReport: (postId: string, uid: string, name: string) => void;
-    onSetReporting: (id: string | null) => void;
-    onSetReportReason: (r: ReportReason) => void;
-    onSetTrustScores: (fn: (prev: Record<string, TrustScore>) => Record<string, TrustScore>) => void;
-    onNavigate: (path: string) => void;
-}
-
-function PostCard({
-                      post, currentUserId, joinedPosts, actingPost, trustScores,
-                      reportingPost, reportReason, postActionMsg, acceptedPostIds,
-                      onJoin, onBlock, onReport, onSetReporting, onSetReportReason,
-                      onSetTrustScores, onNavigate,
-                  }: PostCardProps) {
-    const style    = getIntentStyle(post.intent);
-    const timeLeft = timeRemaining(post.expiresAt);
-    const fraction = post.createdAt ? lifeFraction(post.createdAt, post.expiresAt) : 1;
-    const isUrgent = fraction < 0.25;
-    const isOwn    = currentUserId === post.userId;
-    const hasJoined  = joinedPosts.has(post.id);
-    const isAccepted = acceptedPostIds.has(post.id);
-    const isActing  = actingPost === post.id;
-    const trust     = trustScores[post.userId];
-
-    // Profile photo (loaded once per user)
-    const [authorPhoto, setAuthorPhoto] = useState<string | null>(null);
-    const [authorAge, setAuthorAge]     = useState<number | null>(null);
-
-    // "🔥 Happening now" if posted in last 30 minutes
-    const ageMs       = post.createdAt ? Date.now() - post.createdAt.toMillis() : 0;
-    const isHotNew    = ageMs > 0 && ageMs < 30 * 60 * 1000;
+export default function LandingPage() {
+    const [scrollY, setScrollY] = useState(0);
+    const [visible, setVisible] = useState<Record<string, boolean>>({});
+    const [activeVibe, setActiveVibe] = useState(0);
+    const [vibeOut, setVibeOut] = useState(false);
+    const observerRefs = useRef<IntersectionObserver[]>([]);
 
     useEffect(() => {
-        if (trustScores[post.userId] !== undefined) return;
-        getTrustScore(post.userId).then((s) =>
-            onSetTrustScores((prev) => ({ ...prev, [post.userId]: s }))
-        );
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [post.userId]);
+        const onScroll = () => setScrollY(window.scrollY);
+        window.addEventListener("scroll", onScroll, { passive: true });
+        return () => window.removeEventListener("scroll", onScroll);
+    }, []);
 
-    // Load author profile photo + age once
     useEffect(() => {
-        let cancelled = false;
-        import("../lib/profile").then(({ getUserProfile }) => {
-            getUserProfile(post.userId).then((p) => {
-                if (cancelled || !p) return;
-                if (p.photoURL) setAuthorPhoto(p.photoURL);
-                if (p.age) setAuthorAge(p.age);
-            });
+        const els = document.querySelectorAll("[data-reveal]");
+        els.forEach((el) => {
+            const obs = new IntersectionObserver(
+                ([e]) => { if (e.isIntersecting) setVisible((p) => ({ ...p, [el.id]: true })); },
+                { threshold: 0.12 }
+            );
+            obs.observe(el);
+            observerRefs.current.push(obs);
         });
-        return () => { cancelled = true; };
-    }, [post.userId]);
+        return () => observerRefs.current.forEach((o) => o.disconnect());
+    }, []);
+
+    useEffect(() => {
+        const t = setInterval(() => {
+            setVibeOut(true);
+            setTimeout(() => {
+                setActiveVibe((v) => (v + 1) % VIBES.length);
+                setVibeOut(false);
+            }, 400);
+        }, 3000);
+        return () => clearInterval(t);
+    }, []);
+
+    const r = (id: string, delay = 0) =>
+        `transition-all duration-700 ease-out${delay ? ` delay-[${delay}ms]` : ""} ${visible[id] ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"}`;
 
     return (
-        <article className="bg-[#111118] rounded-2xl border border-white/[0.06] overflow-hidden transition-all active:scale-[0.99]">
-            <div className="p-4 space-y-4">
-                {/* Header — avatar, name, trust */}
-                <header className="flex items-start justify-between gap-3">
-                    <button
-                        onClick={() => onNavigate(`/profile/${post.userId}`)}
-                        className="flex items-center gap-3 flex-1 min-w-0 text-left -m-1 p-1 rounded-lg active:bg-white/5 transition-colors"
-                    >
-                        <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-base font-semibold text-white shrink-0 overflow-hidden relative">
-                            {authorPhoto ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={authorPhoto} alt={post.userName} className="absolute inset-0 w-full h-full object-cover" />
-                            ) : (
-                                post.userName[0]?.toUpperCase()
-                            )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[15px] font-medium text-white truncate">{post.userName}{authorAge ? `, ${authorAge}` : ""}</span>
-                                {trust && trust.metCount > 0 && (
-                                    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
-                                        {trust.metCount}
-                  </span>
-                                )}
-                            </div>
-                            <div className="flex items-center gap-1 mt-0.5 text-[13px] text-[#A1A1AA]">
-                                <span className={`font-medium ${style.text}`}>{style.emoji} {style.label}</span>
-                                {post.city && <span className="text-[#52525B]">·</span>}
-                                {post.city && <span className="truncate">{post.city}</span>}
-                                {post.distanceKm >= 0 && <span className="text-[#52525B]">·</span>}
-                                {post.distanceKm >= 0 && <span>{formatDistance(post.distanceKm)}</span>}
-                            </div>
-                        </div>
-                    </button>
-
-                    {!isOwn && (
-                        <details className="relative shrink-0">
-                            <summary className="list-none cursor-pointer w-9 h-9 flex items-center justify-center text-[#52525B] hover:text-[#A1A1AA] active:bg-white/5 rounded-full transition-colors">
-                                <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-                            </summary>
-                            <div className="absolute right-0 top-10 bg-[#1a1a22] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-30 min-w-[140px]">
-                                <button onClick={() => onSetReporting(post.id)}
-                                        className="w-full text-left px-4 py-3 text-sm text-amber-400 hover:bg-white/5 transition-colors flex items-center gap-2">
-                                    <span>🚩</span> Report
-                                </button>
-                                <button onClick={() => onBlock(post.userId, post.userName)}
-                                        className="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-white/5 transition-colors border-t border-white/5 flex items-center gap-2">
-                                    <span>🚫</span> Block
-                                </button>
-                            </div>
-                        </details>
-                    )}
-                </header>
-
-                {/* Hot badge */}
-                {isHotNew && (
-                    <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-orange-400 bg-orange-500/12 border border-orange-500/25 px-2.5 py-1 rounded-full">
-                        🔥 Happening now
-                    </div>
-                )}
-
-                {/* Body */}
-                <p className="text-[15px] text-white leading-relaxed">{post.text}</p>
-
-                {/* Meta row — time left + bar */}
-                <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-            <span className={`font-medium ${isUrgent ? "text-red-400" : "text-[#A1A1AA]"}`}>
-              {isUrgent ? "⚠ " : "⏳ "}{timeLeft}
-            </span>
-                        {trust && trust.positiveCount > 0 && (
-                            <span className="text-[#A1A1AA] flex items-center gap-1">
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 text-amber-400"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>
-                                {trust.positiveCount} positive
-              </span>
-                        )}
-                    </div>
-                    <div className="h-0.5 w-full bg-white/[0.05] rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full transition-all duration-1000 ${isUrgent ? "bg-red-500/70" : "bg-blue-500/50"}`} style={{ width: `${fraction * 100}%` }} />
-                    </div>
-                </div>
-
-                {/* CTA — Request to join */}
-                {!isOwn && (
-                    <>
-                        {postActionMsg[post.id] ? (
-                            <div className="w-full py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center text-sm font-semibold text-emerald-400">
-                                {postActionMsg[post.id]}
-                            </div>
-                        ) : isAccepted ? (
-                            /* Accepted — big green button, hard to miss */
-                            <button
-                                onClick={() => onJoin(post)}
-                                style={{ minHeight: 52 }}
-                                className="w-full py-3 rounded-2xl bg-emerald-500 text-white text-base font-bold hover:bg-emerald-600 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 animate-pulse"
-                            >
-                                💬 Open chat →
-                            </button>
-                        ) : (
-                            <button
-                                onClick={() => onJoin(post)}
-                                disabled={isActing}
-                                style={{ minHeight: 44 }}
-                                className={`w-full py-3 rounded-xl text-sm font-semibold transition-all active:scale-[0.98] flex items-center justify-center gap-2 ${
-                                    hasJoined
-                                        ? "bg-white/5 text-[#A1A1AA] cursor-default border border-white/5"
-                                        : "bg-blue-500 text-white hover:bg-blue-600 shadow-lg shadow-blue-500/20"
-                                }`}
-                            >
-                                {isActing
-                                    ? <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                                    : hasJoined ? "⏳ Waiting for reply…" : "Request to join →"}
-                            </button>
-                        )}
-                    </>
-                )}
-            </div>
-
-            {/* Report sheet */}
-            {reportingPost === post.id && (
-                <div className="fixed inset-0 bg-black/80 flex items-end z-50 p-4 animate-in fade-in duration-200" onClick={() => onSetReporting(null)}>
-                    <div className="w-full max-w-md mx-auto bg-[#111118] border border-white/10 rounded-3xl p-6 space-y-5 animate-in slide-in-from-bottom duration-200" onClick={(e) => e.stopPropagation()}>
-                        <div className="space-y-1">
-                            <h2 className="text-lg font-semibold text-white">Report this post</h2>
-                            <p className="text-sm text-[#A1A1AA]">Help us keep SwayNow safe. Reports are anonymous.</p>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                            {(["spam","harassment","inappropriate","other"] as ReportReason[]).map((r) => (
-                                <button key={r} onClick={() => onSetReportReason(r)}
-                                        style={{ minHeight: 44 }}
-                                        className={`py-3 rounded-xl text-sm font-medium border capitalize transition-all active:scale-[0.98] ${reportReason === r ? "border-blue-500 bg-blue-500/10 text-white" : "border-white/8 text-[#A1A1AA] hover:border-white/20"}`}>
-                                    {r}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="flex gap-2">
-                            <button onClick={() => onReport(post.id, post.userId, post.userName)}
-                                    style={{ minHeight: 44 }}
-                                    className="flex-1 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600 active:scale-[0.98] transition-all">
-                                Submit
-                            </button>
-                            <button onClick={() => onSetReporting(null)}
-                                    style={{ minHeight: 44 }}
-                                    className="flex-1 rounded-xl border border-white/10 text-[#A1A1AA] text-sm font-medium active:scale-[0.98] transition-all">
-                                Cancel
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </article>
-    );
-}
-
-// ════════════════════════════════════════════════════════════
-//  POST TAB — outside Home for stable input identity
-// ════════════════════════════════════════════════════════════
-
-interface PostTabProps {
-    text: string;
-    setText: (v: string) => void;
-    intent: Intent;
-    setIntent: (v: Intent) => void;
-    duration: Duration;
-    setDuration: (v: Duration) => void;
-    city: string;
-    setCity: (v: string) => void;
-    posting: boolean;
-    postError: string | null;
-    postSuccess: boolean;
-    onPost: () => void;
-}
-
-function PostTabComponent({
-                              text, setText, intent, setIntent, duration, setDuration,
-                              city, setCity, posting, postError, postSuccess, onPost,
-                          }: PostTabProps) {
-    return (
-        <div className="space-y-6 max-w-lg mx-auto">
-            <div className="space-y-1.5">
-                <h1 className="text-2xl font-bold text-white tracking-tight">What are you up to?</h1>
-                <p className="text-[15px] text-[#A1A1AA]">Share what you&apos;re doing right now</p>
-            </div>
-
-            <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="I'm at Alexanderplatz looking for someone to explore Berlin with for the next few hours…"
-                maxLength={280}
-                rows={5}
-                className="w-full bg-[#111118] border border-white/8 rounded-2xl px-4 py-4 text-[15px] text-white placeholder-[#52525B] outline-none focus:border-blue-500 resize-none transition-colors leading-relaxed"
-            />
-
-            <div className="space-y-3">
-                <p className="text-sm font-medium text-[#A1A1AA]">Vibe</p>
-                <div className="grid grid-cols-5 gap-2">
-                    {INTENTS.map((i) => (
-                        <button key={i.value} onClick={() => setIntent(i.value)}
-                                style={{ minHeight: 44 }}
-                                className={`flex flex-col items-center gap-1 py-3 rounded-xl border text-center transition-all active:scale-[0.96] ${intent === i.value ? `${i.tint} border-current ${i.text}` : "bg-white/[0.02] border-white/5 text-[#52525B]"}`}>
-                            <span className="text-xl">{i.emoji}</span>
-                            <span className="text-[11px] font-semibold">{i.label}</span>
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            <div className="space-y-3">
-                <p className="text-sm font-medium text-[#A1A1AA]">City</p>
-                <input type="text" value={city} onChange={(e) => setCity(e.target.value)} placeholder="Berlin"
-                       style={{ minHeight: 44 }}
-                       className="w-full bg-[#111118] border border-white/8 rounded-xl px-4 py-3 text-[15px] text-white placeholder-[#52525B] outline-none focus:border-blue-500 transition-colors" />
-            </div>
-
-            <div className="space-y-3">
-                <p className="text-sm font-medium text-[#A1A1AA]">Available for</p>
-                <div className="grid grid-cols-4 gap-2">
-                    {DURATIONS.map((d) => (
-                        <button key={d.value} onClick={() => setDuration(d.value)}
-                                style={{ minHeight: 44 }}
-                                className={`py-3 rounded-xl text-sm font-semibold border transition-all active:scale-[0.96] ${duration === d.value ? "bg-blue-500/15 text-blue-400 border-blue-500/40" : "bg-white/[0.02] border-white/5 text-[#A1A1AA]"}`}>
-                            {d.label}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {postError && (
-                <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">{postError}</div>
-            )}
-            {postSuccess && (
-                <div className="text-center py-6 space-y-2">
-                    <p className="text-3xl">✅</p>
-                    <p className="text-sm text-emerald-400 font-semibold">Posted! Redirecting…</p>
-                </div>
-            )}
-
-            {!postSuccess && (
-                <button onClick={onPost} disabled={posting || !text.trim()}
-                        style={{ minHeight: 52 }}
-                        className="w-full rounded-2xl bg-blue-500 text-white text-base font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20">
-                    {posting && <div className="w-5 h-5 rounded-full border-2 border-white border-t-transparent animate-spin" />}
-                    {posting ? "Posting…" : "Create post"}
-                </button>
-            )}
-
-            <p className="text-right text-xs text-[#52525B]">{text.length}/280</p>
-        </div>
-    );
-}
-
-// ════════════════════════════════════════════════════════════
-//  MAIN COMPONENT
-// ════════════════════════════════════════════════════════════
-
-export default function Home() {
-    const router = useRouter();
-    const [user, setUser]               = useState<User | null>(null);
-    const [loading, setLoading]         = useState(true);
-    const [authLoading, setAuthLoading] = useState(false);
-    const [authError, setAuthError]     = useState<string | null>(null);
-    const [navTab, setNavTab]           = useState<NavTab>("feed");
-    const [userProfile, setUserProfile] = useState<import("../lib/profile").UserProfile | null>(null);
-    const [editingProfile, setEditingProfile] = useState(false);
-
-    const [allPosts, setAllPosts]               = useState<Post[]>([]);
-    const [feedLoading, setFeedLoading]         = useState(true);
-    const [userCoords, setUserCoords]           = useState<{ lat: number; lng: number } | null>(null);
-    const [locationLoading, setLocationLoading] = useState(true);
-    const [locationError, setLocationError]     = useState<string | null>(null);
-
-    const [text, setText]               = useState("");
-    const [intent, setIntent]           = useState<Intent>("Explore");
-    const [duration, setDuration]       = useState<Duration>(60);
-    const [city, setCity]               = useState("Berlin");
-    const [posting, setPosting]         = useState(false);
-    const [postError, setPostError]     = useState<string | null>(null);
-    const [postSuccess, setPostSuccess] = useState(false);
-
-    const [filterCountry, setFilterCountry] = useState("🇩🇪 Germany");
-    const [filterCity, setFilterCity]       = useState("Berlin");
-
-    const [acceptedChats, setAcceptedChats] = useState<JoinRequest[]>([]);
-    const [pendingCount, setPendingCount]   = useState(0);
-
-    const [toast, setToast]             = useState<{ title: string; body: string; chatId?: string; route?: string } | null>(null);
-    const [notifGranted, setNotifGranted] = useState(false);
-
-    const [joinedPosts, setJoinedPosts]     = useState<Set<string>>(new Set());
-    const [actingPost, setActingPost]       = useState<string | null>(null);
-    const [trustScores, setTrustScores]     = useState<Record<string, TrustScore>>({});
-    const [reportingPost, setReportingPost] = useState<string | null>(null);
-    const [blockedIds, setBlockedIds]       = useState<Set<string>>(new Set());
-    const [reportReason, setReportReason]   = useState<ReportReason>("spam");
-    const [postActionMsg, setPostActionMsg] = useState<Record<string, string>>({});
-
-    const [, setTick] = useState(0);
-    useEffect(() => {
-        const id = setInterval(() => setTick((t) => t + 1), 30_000);
-        return () => clearInterval(id);
-    }, []);
-
-    useEffect(() => {
-        const unsub = onAuthStateChanged(auth, async (u) => {
-            setUser(u);
-            if (u) {
-                // Auto-create user doc on first login so they show in admin
-                try {
-                    const { doc, setDoc, getDoc, serverTimestamp: st } = await import("firebase/firestore");
-                    const ref = doc(db, "users", u.uid);
-                    const snap = await getDoc(ref);
-                    if (!snap.exists()) {
-                        await setDoc(ref, {
-                            uid: u.uid,
-                            displayName: u.displayName ?? "Anonymous",
-                            email: u.email ?? "",
-                            photoURL: u.photoURL ?? null,
-                            age: null,
-                            gender: null,
-                            languages: [],
-                            bio: "",
-                            createdAt: st(),
-                            updatedAt: st(),
-                        });
-                    }
-                } catch (e) { console.warn("User doc create error:", e); }
-            }
-            setLoading(false);
-        });
-        return () => unsub();
-    }, []);
-
-    // Load blocked users
-    useEffect(() => {
-        if (!user) return;
-        getBlockedUserIds(user.uid).then((ids) => setBlockedIds(new Set(ids))).catch(console.warn);
-    }, [user]);
-
-    // Request notification permission after login
-    useEffect(() => {
-        if (!user) return;
-        requestNotificationPermission(user.uid).then(setNotifGranted).catch(console.warn);
-        // Listen for foreground push messages → show toast
-        const unsub = onForegroundMessage((msg) => {
-            const isJoinRequest = msg.type === "join_request";
-            const isAccepted    = msg.type === "request_accepted";
-            setToast({
-                title: msg.title,
-                body: msg.body,
-                chatId: isAccepted ? msg.data?.chatId : undefined,
-                route: isJoinRequest ? "/requests" : undefined,
-            });
-            setTimeout(() => setToast(null), 6000);
-        });
-        return () => { if (typeof unsub === "function") unsub(); };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user?.uid]);
-
-    useEffect(() => {
-        if (!navigator.geolocation) { setLocationLoading(false); return; }
-        const bail = setTimeout(() => setLocationLoading(false), 5000);
-        navigator.geolocation.getCurrentPosition(
-            (pos) => { clearTimeout(bail); setUserCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setLocationLoading(false); },
-            () => { clearTimeout(bail); setLocationError("Location off"); setLocationLoading(false); },
-            { timeout: 5000, maximumAge: 60000 }
-        );
-        return () => clearTimeout(bail);
-    }, []);
-
-    useEffect(() => {
-        const q = query(collection(db, "posts"), orderBy("createdAt", "desc"));
-        return onSnapshot(q, (snap) => {
-            setAllPosts(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Post)));
-            setFeedLoading(false);
-        });
-    }, []);
-
-    useEffect(() => {
-        if (!user) return;
-        const q1 = query(collection(db, "requests"), where("receiverUserId","==",user.uid), where("status","==","accepted"));
-        const q2 = query(collection(db, "requests"), where("senderUserId","==",user.uid),   where("status","==","accepted"));
-        const q3 = query(collection(db, "requests"), where("receiverUserId","==",user.uid), where("status","==","pending"));
-        const unsub1 = onSnapshot(q1, (s) => {
-            setAcceptedChats((prev) => {
-                const mine = prev.filter((r) => r.senderUserId === user.uid);
-                return [...mine, ...s.docs.map((d) => ({ id: d.id, ...d.data() } as JoinRequest))];
-            });
-        });
-        const unsub2 = onSnapshot(q2, (s) => {
-            const newChats = s.docs.map((d) => ({ id: d.id, ...d.data() } as JoinRequest));
-            setAcceptedChats((prev) => {
-                // Show toast for newly accepted requests (not on initial load)
-                const prevIds = new Set(prev.map((r) => r.id));
-                const brandNew = newChats.filter((r) => !prevIds.has(r.id));
-                if (brandNew.length > 0 && prev.length > 0) {
-                    const req = brandNew[0];
-                    const chatId = `${req.postId}_${user.uid}`;
-                    setToast({
-                        title: "Your request was accepted!",
-                        body: `Tap to open chat now`,
-                        chatId,
-                    });
-                    setTimeout(() => setToast(null), 6000);
-                }
-                const mine = prev.filter((r) => r.receiverUserId === user.uid);
-                return [...mine, ...newChats];
-            });
-        });
-        const unsub3 = onSnapshot(q3, (s) => {
-            const newCount = s.size;
-            setPendingCount((prev) => {
-                // Show toast when a new request arrives
-                if (newCount > prev && prev >= 0) {
-                    setToast({
-                        title: "👋 New join request!",
-                        body: "Someone wants to join your post. Tap to review.",
-                        route: "/requests",
-                    });
-                    setTimeout(() => setToast(null), 6000);
-                }
-                return newCount;
-            });
-        });
-        return () => { unsub1(); unsub2(); unsub3(); };
-    }, [user]);
-
-    // ── Derived ────────────────────────────────────────────
-    const nearbyPosts: NearbyPost[] = allPosts
-        .filter((p) => p.expiresAt && isActive(p.expiresAt))
-        .filter((p) => !blockedIds.has(p.userId))
-        .map((p) => ({ ...p, distanceKm: userCoords ? getDistanceKm(userCoords.lat, userCoords.lng, p.latitude, p.longitude) : -1 }))
-        .filter((p) => !userCoords || p.distanceKm <= RADIUS_KM)
-        .sort((a, b) => (a.distanceKm < 0 ? 0 : a.distanceKm - b.distanceKm));
-
-    const explorePosts: NearbyPost[] = allPosts
-        .filter((p) => p.expiresAt && isActive(p.expiresAt))
-        .filter((p) => !blockedIds.has(p.userId))
-        .filter((p) => p.city?.toLowerCase() === filterCity.toLowerCase())
-        .map((p) => ({ ...p, distanceKm: -1 }));
-
-    // ── Handlers ───────────────────────────────────────────
-    const handleLogin = async () => {
-        setAuthLoading(true); setAuthError(null);
-        try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-        catch (err: unknown) {
-            const code = (err as { code?: string })?.code ?? "";
-            if (code === "auth/popup-closed-by-user") setAuthError("Login cancelled.");
-            else if (code === "auth/unauthorized-domain") setAuthError("Domain not authorised.");
-            else if (code === "auth/popup-blocked") setAuthError("Popup blocked.");
-            else setAuthError("Login failed.");
-        } finally { setAuthLoading(false); }
-    };
-
-    const handleLogout = async () => { await signOut(auth).catch(console.error); };
-
-    const handleShareApp = async () => {
-        const result = await shareApp();
-        if (result === "copied") {
-            setToast({ title: "Link copied!", body: "Share it with friends to grow your local scene." });
-            setTimeout(() => setToast(null), 3000);
+        <>
+            <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cabinet+Grotesk:wght@400;500;700;800;900&family=Satoshi:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap');
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        :root{
+          --void:#04040a;--surface:#0a0a12;--card:#0f0f1a;--card2:#131320;
+          --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.12);
+          --blue:#4F7FFF;--blue-b:#6B96FF;--blue-dim:rgba(79,127,255,0.12);--blue-glow:rgba(79,127,255,0.28);
+          --white:#fff;--muted:#6b6b7a;--soft:#a0a0b0;
+          --D:'Cabinet Grotesk',sans-serif;--B:'Satoshi',sans-serif;
         }
-    };
+        html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
+        body{background:var(--void);color:var(--white);font-family:var(--B);overflow-x:hidden;line-height:1.6}
+        body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;opacity:.018;
+          background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)'/%3E%3C/svg%3E");
+          background-size:200px}
 
-    const handlePost = async () => {
-        if (!user || !text.trim()) return;
-        setPosting(true); setPostError(null); setPostSuccess(false);
-        let lat = userCoords?.lat ?? 0, lng = userCoords?.lng ?? 0;
-        if (!userCoords) {
-            try {
-                const pos = await new Promise<GeolocationPosition>((res, rej) =>
-                    navigator.geolocation.getCurrentPosition(res, rej, { timeout: 8000 }));
-                lat = pos.coords.latitude; lng = pos.coords.longitude;
-                setUserCoords({ lat, lng });
-            } catch { setPostError("Location required to post."); setPosting(false); return; }
+        /* NAV */
+        .nav{position:fixed;top:0;left:0;right:0;z-index:200;display:flex;align-items:center;justify-content:space-between;padding:24px 48px;transition:all .4s cubic-bezier(.16,1,.3,1)}
+        .nav.stuck{padding:14px 48px;background:rgba(4,4,10,.88);backdrop-filter:blur(24px) saturate(1.8);border-bottom:1px solid var(--border)}
+        .nav-logo{display:flex;align-items:center;gap:10px;font-family:var(--D);font-weight:900;font-size:20px;color:var(--white);text-decoration:none;letter-spacing:-.5px}
+        .logo-mark{width:32px;height:32px;background:var(--blue);border-radius:9px;display:flex;align-items:center;justify-content:center;box-shadow:0 0 20px var(--blue-glow)}
+        .nav-links{display:flex;align-items:center;gap:4px}
+        .nl{font-size:14px;font-weight:500;color:var(--muted);text-decoration:none;padding:8px 14px;border-radius:8px;transition:color .2s}
+        .nl:hover{color:var(--white)}
+        .nav-btn{background:var(--blue);color:white;font-family:var(--B);font-size:14px;font-weight:700;padding:10px 22px;border-radius:100px;text-decoration:none;transition:all .2s;box-shadow:0 4px 20px var(--blue-glow)}
+        .nav-btn:hover{transform:translateY(-1px);box-shadow:0 8px 32px var(--blue-glow);background:var(--blue-b)}
+
+        /* HERO */
+        .hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:140px 24px 100px;position:relative;overflow:hidden}
+        .hglow{position:absolute;top:-10%;left:50%;transform:translateX(-50%);width:900px;height:700px;background:radial-gradient(ellipse,rgba(79,127,255,.09) 0%,transparent 65%);pointer-events:none}
+        .hgrid{position:absolute;inset:0;pointer-events:none;background-image:linear-gradient(rgba(79,127,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(79,127,255,.04) 1px,transparent 1px);background-size:72px 72px;mask-image:radial-gradient(ellipse 70% 70% at 50% 35%,black,transparent)}
+        .eyebrow{display:inline-flex;align-items:center;gap:8px;background:rgba(79,127,255,.1);border:1px solid rgba(79,127,255,.22);color:#93b4ff;font-size:11px;font-weight:700;padding:6px 16px;border-radius:100px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:36px}
+        .edot{width:6px;height:6px;border-radius:50%;background:var(--blue);animation:blink 2s infinite}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+        .h1{font-family:var(--D);font-weight:900;font-size:clamp(52px,8.5vw,102px);line-height:.95;letter-spacing:-4px;color:var(--white);max-width:1000px;margin-bottom:28px}
+        .h1 em{font-style:normal;color:var(--blue)}
+        .vibe{font-family:var(--D);font-weight:700;font-size:clamp(17px,2.2vw,24px);color:var(--soft);margin-bottom:48px;height:34px;display:flex;align-items:center;justify-content:center}
+        .vt{transition:all .4s cubic-bezier(.16,1,.3,1);display:inline-block}
+        .vt.out{opacity:0;transform:translateY(10px)}
+        .hero-btns{display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:80px}
+        .btn-m{background:var(--blue);color:white;font-family:var(--B);font-size:16px;font-weight:700;padding:16px 40px;border-radius:100px;text-decoration:none;transition:all .25s;display:inline-flex;align-items:center;gap:10px;box-shadow:0 8px 32px var(--blue-glow)}
+        .btn-m:hover{background:var(--blue-b);transform:translateY(-2px);box-shadow:0 16px 48px var(--blue-glow)}
+        .btn-g{background:transparent;color:var(--soft);font-family:var(--B);font-size:15px;font-weight:500;padding:16px 28px;border-radius:100px;text-decoration:none;border:1px solid var(--border2);transition:all .2s}
+        .btn-g:hover{color:var(--white);border-color:rgba(255,255,255,.25)}
+
+        /* PHONES */
+        .phones{display:flex;align-items:flex-start;justify-content:center;gap:20px;position:relative}
+        .psh{background:var(--card);border:1px solid var(--border2);border-radius:44px;overflow:hidden;box-shadow:0 48px 96px rgba(0,0,0,.7),0 0 0 1px rgba(255,255,255,.04);width:264px}
+        .psh.side{width:224px;transform:translateY(48px) rotate(-5deg);animation:fside 5s ease-in-out infinite;box-shadow:0 60px 100px rgba(0,0,0,.8)}
+        @keyframes fside{0%,100%{transform:translateY(48px) rotate(-5deg)}50%{transform:translateY(32px) rotate(-5deg)}}
+        .pnotch{width:90px;height:24px;background:var(--void);border-radius:0 0 18px 18px;margin:0 auto 14px;position:relative;z-index:2}
+        .pbody{padding:0 14px 28px}
+        .mhd{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+        .mlogo{font-family:var(--D);font-weight:900;font-size:15px;letter-spacing:-.5px}
+        .mpill{font-size:9px;font-weight:700;padding:3px 8px;border-radius:100px}
+        .mcard{background:#161621;border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:12px;margin-bottom:8px}
+        .mrow{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+        .mav{width:28px;height:28px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:white}
+        .mname{font-size:11px;font-weight:700;color:white}
+        .msub{font-size:9px;color:#6b6b7a;margin-top:1px}
+        .mint{display:inline-flex;align-items:center;gap:3px;font-size:8px;font-weight:700;padding:3px 7px;border-radius:100px;margin-bottom:6px}
+        .mtxt{font-size:10px;color:#9090a0;line-height:1.5;margin-bottom:8px}
+        .mprog{height:2px;border-radius:2px;background:rgba(255,255,255,.06);overflow:hidden;margin-bottom:8px}
+        .mpf{height:100%;border-radius:2px;opacity:.6}
+        .mbtn{width:100%;background:var(--blue);color:white;font-size:10px;font-weight:700;padding:7px;border-radius:9px;text-align:center}
+        .mhot{display:inline-flex;align-items:center;gap:4px;font-size:8px;font-weight:700;padding:3px 7px;border-radius:100px;background:rgba(249,115,22,.12);border:1px solid rgba(249,115,22,.2);color:#fb923c;margin-bottom:6px}
+        .mchd{display:flex;align-items:center;gap:8px;padding:0 0 12px;border-bottom:1px solid rgba(255,255,255,.05);margin-bottom:12px}
+        .mbbl{margin-bottom:6px;display:flex}
+        .mbbl.me{justify-content:flex-end}
+        .mbt{max-width:75%;padding:7px 10px;border-radius:12px;font-size:10px;line-height:1.5}
+        .mbt.them{background:#1a1a2a;color:#b0b0c0;border-radius:12px 12px 12px 2px}
+        .mbt.me{background:var(--blue);color:white;border-radius:12px 12px 2px 12px}
+        .mrev{background:rgba(79,127,255,.07);border:1px solid rgba(79,127,255,.15);border-radius:10px;padding:10px;margin-top:10px;text-align:center}
+
+        /* MARQUEE */
+        .mqw{overflow:hidden;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:18px 0;background:var(--surface)}
+        .mqt{display:flex;gap:0;width:max-content;animation:mq 30s linear infinite}
+        @keyframes mq{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+        .mqi{white-space:nowrap;padding:0 36px;font-family:var(--D);font-weight:700;font-size:14px;color:var(--muted);letter-spacing:-.3px;display:flex;align-items:center;gap:14px}
+        .mqs{color:var(--blue);font-size:18px}
+
+        /* WRAP */
+        .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+        .sec{padding:120px 0}
+        .stag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:3px;color:var(--blue);text-transform:uppercase;margin-bottom:20px}
+        .sh2{font-family:var(--D);font-weight:900;font-size:clamp(38px,5.5vw,64px);line-height:1.0;letter-spacing:-2.5px;color:var(--white);margin-bottom:20px}
+        .sh2 em{font-style:normal;color:var(--blue)}
+        .sdesc{font-size:17px;color:var(--soft);max-width:520px;line-height:1.75;font-weight:300}
+
+        /* INSIGHT */
+        .ig{display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:center}
+        .bq{font-family:var(--D);font-weight:900;font-size:clamp(26px,3.5vw,42px);line-height:1.2;letter-spacing:-1.5px;color:var(--white);margin-bottom:28px}
+        .bq em{font-style:normal;color:var(--blue)}
+        .ip{font-size:16px;color:var(--soft);line-height:1.8;font-weight:300;margin-bottom:16px}
+        .ir{display:flex;flex-direction:column;gap:14px}
+        .icard{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:26px;display:flex;align-items:flex-start;gap:16px;transition:border-color .3s}
+        .icard:hover{border-color:var(--border2)}
+        .iem{font-size:22px;flex-shrink:0;margin-top:2px}
+        .ih{font-family:var(--D);font-weight:800;font-size:15px;color:var(--white);margin-bottom:5px;letter-spacing:-.3px}
+        .ipdesc{font-size:13px;color:var(--muted);line-height:1.7;font-weight:300}
+
+        /* STEPS */
+        .sg{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;border:1px solid var(--border);border-radius:24px;overflow:hidden;margin-top:64px}
+        .sc{background:var(--card);padding:44px 36px;transition:background .3s;position:relative;overflow:hidden}
+        .sc::before{content:attr(data-n);position:absolute;top:-10px;right:16px;font-family:var(--D);font-weight:900;font-size:100px;color:rgba(79,127,255,.04);line-height:1;pointer-events:none}
+        .sc:hover{background:var(--card2)}
+        .sn{font-size:10px;font-weight:700;letter-spacing:3px;color:var(--blue);opacity:.7;margin-bottom:14px;text-transform:uppercase}
+        .si{font-size:30px;margin-bottom:18px}
+        .sh{font-family:var(--D);font-weight:800;font-size:19px;letter-spacing:-.5px;color:var(--white);margin-bottom:10px}
+        .sp{font-size:14px;color:var(--muted);line-height:1.75;font-weight:300}
+
+        /* FEATURES */
+        .fg{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;border:1px solid var(--border);border-radius:24px;overflow:hidden;margin-top:64px}
+        .fc{background:var(--card);padding:36px;transition:background .3s}
+        .fc:hover{background:var(--card2)}
+        .fem{font-size:26px;margin-bottom:14px}
+        .fh{font-family:var(--D);font-weight:800;font-size:16px;color:var(--white);margin-bottom:9px;letter-spacing:-.3px}
+        .fp{font-size:13px;color:var(--muted);line-height:1.75;font-weight:300}
+
+        /* FOUNDER */
+        .fw{background:var(--card);border:1px solid var(--border);border-radius:28px;padding:56px;display:grid;grid-template-columns:1fr auto;gap:60px;align-items:center;margin-top:64px;position:relative;overflow:hidden}
+        .fw::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent 10%,var(--blue) 50%,transparent 90%)}
+        .fq{font-family:var(--D);font-weight:900;font-size:clamp(20px,2.8vw,30px);line-height:1.3;letter-spacing:-1px;color:var(--white);margin-bottom:22px}
+        .fq em{font-style:normal;color:var(--blue)}
+        .fb{font-size:15px;color:var(--soft);line-height:1.8;font-weight:300;margin-bottom:18px}
+        .fsig{font-family:var(--D);font-weight:700;font-size:15px;color:var(--blue)}
+        .fcr{text-align:center;min-width:160px}
+        .fav{width:80px;height:80px;border-radius:22px;background:linear-gradient(135deg,var(--blue),#1D4ED8);display:flex;align-items:center;justify-content:center;font-family:var(--D);font-weight:900;font-size:32px;color:white;margin:0 auto 16px;box-shadow:0 12px 32px var(--blue-glow)}
+        .fn{font-family:var(--D);font-weight:800;font-size:18px;color:var(--white);letter-spacing:-.5px;margin-bottom:4px}
+        .ft{font-size:13px;color:var(--blue);font-weight:500;margin-bottom:16px}
+        .fchips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+        .fch{background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--muted);font-size:11px;padding:4px 10px;border-radius:100px}
+
+        /* CTA */
+        .ctas{padding:140px 0;text-align:center;position:relative}
+        .ctag{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:700px;height:400px;background:radial-gradient(ellipse,rgba(79,127,255,.1) 0%,transparent 70%);pointer-events:none}
+        .ctai{background:var(--card);border:1px solid var(--border2);border-radius:36px;padding:88px 60px;max-width:700px;margin:0 auto;position:relative;overflow:hidden}
+        .ctai::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(79,127,255,.6),transparent)}
+        .ctah{font-family:var(--D);font-weight:900;font-size:clamp(36px,5vw,58px);letter-spacing:-2.5px;color:var(--white);margin-bottom:16px;line-height:1.0}
+        .ctah em{font-style:normal;color:var(--blue)}
+        .ctap{font-size:17px;color:var(--soft);margin-bottom:44px;font-weight:300;line-height:1.65}
+
+        /* FOOTER */
+        .footer{border-top:1px solid var(--border);padding:44px 48px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:20px}
+        .fl{font-family:var(--D);font-weight:900;font-size:18px;color:var(--muted);text-decoration:none}
+        .fl span{color:var(--blue)}
+        .flinks{display:flex;gap:24px;list-style:none}
+        .flinks a{font-size:13px;color:var(--muted);text-decoration:none;transition:color .2s}
+        .flinks a:hover{color:var(--white)}
+        .fcp{font-size:12px;color:#2a2a3a}
+
+        /* FADE UP */
+        .fu{opacity:0;transform:translateY(20px);animation:fuanim .9s cubic-bezier(.16,1,.3,1) forwards}
+        @keyframes fuanim{to{opacity:1;transform:translateY(0)}}
+
+        /* RESPONSIVE */
+        @media(max-width:900px){
+          .nav{padding:18px 20px}.nav.stuck{padding:12px 20px}.nav-links{display:none}
+          .sg{grid-template-columns:1fr}.fg{grid-template-columns:1fr 1fr}
+          .ig{grid-template-columns:1fr;gap:48px}.fw{grid-template-columns:1fr;gap:36px;padding:40px}
+          .fcr{display:flex;flex-direction:column;align-items:flex-start}.fchips{justify-content:flex-start}
+          .ctai{padding:56px 28px}.footer{padding:32px 20px;flex-direction:column;align-items:flex-start}
+          .psh.side{display:none}.psh{width:248px}.sec{padding:80px 0}
         }
-        try {
-            await addDoc(collection(db, "posts"), {
-                text: text.trim(), intent,
-                userId: user.uid, userName: user.displayName ?? "Anonymous",
-                createdAt: serverTimestamp(), expiresAt: getExpiresAt(duration),
-                latitude: lat, longitude: lng, city: city.trim() || "Unknown",
-            });
-            setText(""); setPostSuccess(true);
-            setTimeout(() => { setPostSuccess(false); setNavTab("feed"); }, 1500);
-        } catch { setPostError("Failed to post."); }
-        finally { setPosting(false); }
-    };
-
-    const handleJoin = async (post: NearbyPost) => {
-        if (!user || post.userId === user.uid) return;
-
-        // Already accepted → open chat directly (instant, no Firestore call needed)
-        if (acceptedPostIds.has(post.id)) {
-            router.push(`/chat/${post.id}_${user.uid}`);
-            return;
+        @media(max-width:600px){
+          .fg{grid-template-columns:1fr}.h1{letter-spacing:-2px}
         }
+      `}</style>
 
-        setActingPost(post.id);
-        try {
-            // Already pending → let them know
-            const pendingId = await getPendingRequestId(post.id, user.uid);
-            if (pendingId) {
-                setJoinedPosts((prev) => new Set(prev).add(post.id));
-                setPostActionMsg((prev) => ({ ...prev, [post.id]: "⏳ Waiting for reply…" }));
-                return;
-            }
-
-            // Send request
-            await sendJoinRequest(post.id, post.text, user.uid, user.displayName ?? "Anonymous", post.userId, post.userName);
-            setJoinedPosts((prev) => new Set(prev).add(post.id));
-            setPostActionMsg((prev) => ({ ...prev, [post.id]: "✓ Request sent! They'll be notified." }));
-            setTimeout(() => setPostActionMsg((prev) => { const n = { ...prev }; delete n[post.id]; return n; }), 4000);
-        } catch (e) { console.error(e); }
-        finally { setActingPost(null); }
-    };
-
-    const handleBlock = async (uid: string, name: string) => {
-        if (!user) return;
-        await blockUser(user.uid, uid, name);
-        setBlockedIds((prev) => new Set([...prev, uid]));
-        setToast({ title: `${name} blocked`, body: "Their posts are hidden. You can unblock from their profile." });
-        setTimeout(() => setToast(null), 4000);
-    };
-
-    const handleReport = async (postId: string, uid: string, name: string) => {
-        if (!user) return;
-        await reportUser(user.uid, uid, name, postId, reportReason);
-        setReportingPost(null);
-        setPostActionMsg((prev) => ({ ...prev, [postId]: "✓ Reported. Thank you." }));
-        setTimeout(() => setPostActionMsg((prev) => { const n = { ...prev }; delete n[postId]; return n; }), 3000);
-    };
-
-    // Posts where the current user's request was accepted
-    const acceptedPostIds = new Set(
-        acceptedChats
-            .filter((r) => r.senderUserId === user?.uid)
-            .map((r) => r.postId)
-    );
-
-    const cardProps = (post: NearbyPost) => ({
-        post,
-        currentUserId: user?.uid ?? "",
-        joinedPosts, actingPost, trustScores, reportingPost, reportReason, postActionMsg,
-        acceptedPostIds,
-        onJoin: handleJoin, onBlock: handleBlock, onReport: handleReport,
-        onSetReporting: setReportingPost, onSetReportReason: setReportReason,
-        onSetTrustScores: setTrustScores, onNavigate: router.push,
-    });
-
-    // ── Loading ─────────────────────────────────────────────
-    if (loading) return (
-        <main className="flex min-h-screen items-center justify-center bg-[#0B0B0F]">
-            <div className="space-y-4 text-center">
-                <p className="text-4xl font-bold tracking-tight text-white" style={{letterSpacing:"-0.04em"}}>SwayNow</p>
-                <div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mx-auto" />
-            </div>
-        </main>
-    );
-
-    // ── Login (Hero screen) ─────────────────────────────────
-    if (!user) return (
-        <main className="flex min-h-screen flex-col bg-[#0B0B0F] text-white">
-            {/* Top section — hero */}
-            <div className="flex-1 flex flex-col items-center justify-center px-6 max-w-md mx-auto w-full">
-                <div className="mb-12 text-center space-y-4">
-                    {/* Logo mark */}
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-2xl shadow-blue-500/30 mb-2">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="w-8 h-8">
-                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-                            <circle cx="12" cy="10" r="3" fill="white"/>
+            {/* NAV */}
+            <nav className={`nav${scrollY > 60 ? " stuck" : ""}`}>
+                <Link href="/" className="nav-logo">
+                    <div className="logo-mark">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.8} strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16}}>
+                            <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/>
+                            <circle cx="12" cy="10" r="3" fill="white" stroke="none"/>
                         </svg>
                     </div>
-                    <h1 className="text-[40px] sm:text-5xl font-bold tracking-tight leading-[1.05]" style={{letterSpacing:"-0.03em"}}>
-                        Find your<br/>people anywhere
-                    </h1>
-                    <p className="text-[15px] text-[#A1A1AA] leading-relaxed max-w-xs mx-auto">
-                        Real-time. Local. Spontaneous. Connect with people nearby in your city.
-                    </p>
+                    SwayNow
+                </Link>
+                <div className="nav-links">
+                    <a href="#how" className="nl">How it works</a>
+                    <a href="#about" className="nl">About</a>
+                    <a href="#features" className="nl">Features</a>
+                </div>
+                <Link href="/app" className="nav-btn">Open app →</Link>
+            </nav>
+
+            {/* HERO */}
+            <section className="hero">
+                <div className="hgrid"/><div className="hglow"/>
+                <div className="eyebrow fu" style={{animationDelay:"0ms"}}>
+                    <span className="edot"/>Real people · Real meetups
+                </div>
+                <h1 className="h1 fu" style={{animationDelay:"80ms"}}>
+                    Your friends<br/>are busy.<br/><em>Someone nearby</em><br/>isn&apos;t.
+                </h1>
+                <div className="vibe fu" style={{animationDelay:"160ms"}}>
+                    <span className={`vt${vibeOut ? " out" : ""}`}>{VIBES[activeVibe]}</span>
+                </div>
+                <div className="hero-btns fu" style={{animationDelay:"240ms"}}>
+                    <Link href="/app" className="btn-m">
+                        Find people near me
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16}}><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </Link>
+                    <a href="#how" className="btn-g">See how it works</a>
                 </div>
 
-                <div className="w-full space-y-3">
-                    {authError && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-300 text-center">{authError}</div>
-                    )}
-                    <button onClick={handleLogin} disabled={authLoading}
-                            style={{ minHeight: 52 }}
-                            className="flex items-center justify-center gap-3 w-full rounded-2xl bg-white text-black text-base font-semibold hover:bg-neutral-100 active:scale-[0.98] transition-all disabled:opacity-50 shadow-lg">
-                        {authLoading ? <div className="w-5 h-5 rounded-full border-2 border-black border-t-transparent animate-spin" /> : <GoogleIcon />}
-                        {authLoading ? "Signing in…" : "Continue with Google"}
-                    </button>
-
-                    {/* Trust badges row */}
-                    <div className="flex items-center justify-center gap-4 pt-4 text-xs text-[#52525B]">
-                        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/> Free forever</span>
-                        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-blue-500"/> Real users</span>
-                        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-amber-500"/> No ads</span>
-                    </div>
-                </div>
-            </div>
-
-            {/* Bottom legal */}
-            <p className="text-center text-xs text-[#52525B] py-6 px-6 leading-relaxed">
-                By signing in you agree to our{" "}
-                <a href="/legal/terms" className="underline hover:text-white transition-colors">Terms</a>
-                {" "}and{" "}
-                <a href="/legal/privacy" className="underline hover:text-white transition-colors">Privacy Policy</a>
-            </p>
-        </main>
-    );
-
-    // ════════════════════════════════════════════════════════
-    //  Tab content components (defined here to access state)
-    // ════════════════════════════════════════════════════════
-
-    const FeedTab = () => (
-        <div className="space-y-4">
-            {/* Status row */}
-            <div className="flex items-center gap-2 px-1 text-xs">
-                {locationLoading && <><div className="w-2 h-2 rounded-full bg-[#A1A1AA] animate-pulse" /><span className="text-[#A1A1AA]">Locating…</span></>}
-                {!locationLoading && userCoords && (
-                    <>
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="text-[#A1A1AA] font-medium">Within {RADIUS_KM} km</span>
-                        <span className="text-[#52525B] ml-auto">{nearbyPosts.length} active</span>
-                    </>
-                )}
-                {!locationLoading && locationError && <><div className="w-2 h-2 rounded-full bg-amber-500" /><span className="text-amber-500/80">Location off — showing all</span></>}
-            </div>
-
-            {feedLoading && (
-                <div className="flex justify-center py-20">
-                    <div className="w-6 h-6 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-                </div>
-            )}
-
-            {!feedLoading && nearbyPosts.length === 0 && (
-                <div className="text-center py-16 px-6 space-y-5">
-                    <div className="w-20 h-20 mx-auto rounded-3xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-3xl">📍</div>
-                    <div className="space-y-1.5 max-w-xs mx-auto">
-                        <h3 className="text-lg font-semibold text-white">No one nearby right now</h3>
-                        <p className="text-[15px] text-[#A1A1AA] leading-relaxed">Be the first to set the vibe in your area.</p>
-                    </div>
-                    <button onClick={() => setNavTab("post")}
-                            style={{ minHeight: 48 }}
-                            className="px-6 rounded-2xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all shadow-lg shadow-blue-500/20">
-                        Create the first post →
-                    </button>
-                    <div className="pt-2">
-                        <button onClick={handleShareApp}
-                                className="text-sm text-[#A1A1AA] hover:text-white transition-colors underline underline-offset-4">
-                            or invite friends to join you →
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {nearbyPosts.map((p) => <PostCard key={p.id} {...cardProps(p)} />)}
-        </div>
-    );
-
-    const ExploreTab = () => (
-        <div className="space-y-5">
-            <div className="space-y-2">
-                <p className="text-sm font-medium text-[#A1A1AA]">Country</p>
-                <div className="flex gap-2 flex-wrap">
-                    {Object.keys(LOCATIONS).map((c) => (
-                        <button key={c} onClick={() => { setFilterCountry(c); setFilterCity(LOCATIONS[c][0]); }}
-                                style={{ minHeight: 36 }}
-                                className={`px-3 rounded-xl text-xs font-semibold border transition-all active:scale-[0.96] ${filterCountry === c ? "bg-blue-500 text-white border-blue-500" : "border-white/8 text-[#A1A1AA] bg-white/[0.02]"}`}>
-                            {c}
-                        </button>
-                    ))}
-                </div>
-            </div>
-            <div className="space-y-2">
-                <p className="text-sm font-medium text-[#A1A1AA]">City</p>
-                <div className="flex gap-2 flex-wrap">
-                    {(LOCATIONS[filterCountry] ?? []).map((c) => (
-                        <button key={c} onClick={() => setFilterCity(c)}
-                                style={{ minHeight: 36 }}
-                                className={`px-3 rounded-xl text-xs font-semibold border transition-all active:scale-[0.96] ${filterCity === c ? "bg-white text-black border-white" : "border-white/8 text-[#A1A1AA] bg-white/[0.02]"}`}>
-                            {c}
-                        </button>
-                    ))}
-                </div>
-            </div>
-            <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-white">{filterCity}</h2>
-                    <span className="text-xs text-[#52525B]">{explorePosts.length} active</span>
-                </div>
-                {feedLoading && (
-                    <div className="flex justify-center py-12"><div className="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" /></div>
-                )}
-                {!feedLoading && explorePosts.length === 0 && (
-                    <div className="text-center py-12 space-y-3">
-                        <div className="w-14 h-14 mx-auto rounded-2xl bg-white/5 flex items-center justify-center text-2xl">🌍</div>
-                        <p className="text-sm text-[#A1A1AA]">Nothing happening in {filterCity} yet</p>
-                    </div>
-                )}
-                {explorePosts.map((p) => <PostCard key={p.id} {...cardProps(p)} />)}
-            </div>
-        </div>
-    );
-
-    const ChatsTab = () => (
-        <div className="space-y-4">
-            {pendingCount > 0 && (
-                <button onClick={() => router.push("/requests")}
-                        style={{ minHeight: 60 }}
-                        className="w-full flex items-center justify-between bg-blue-500/10 border border-blue-500/30 rounded-2xl px-4 py-4 active:scale-[0.99] transition-all">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center text-lg">📬</div>
-                        <div className="text-left">
-                            <p className="text-sm font-semibold text-white">{pendingCount} pending request{pendingCount > 1 ? "s" : ""}</p>
-                            <p className="text-xs text-[#A1A1AA]">People want to join your posts</p>
+                {/* PHONES */}
+                <div className="phones fu" style={{animationDelay:"360ms"}}>
+                    <div className="psh">
+                        <div className="pnotch"/>
+                        <div className="pbody">
+                            <div className="mhd">
+                                <span className="mlogo">SwayNow</span>
+                                <span className="mpill" style={{background:"rgba(79,127,255,.12)",border:"1px solid rgba(79,127,255,.2)",color:"#93b4ff"}}>● 4 nearby</span>
+                            </div>
+                            {[
+                                {av:"A",avc:"#4F7FFF",n:"Alex",age:24,city:"Mitte",int:"🧭 Explore",ic:"rgba(147,180,255,.12)",it:"#93b4ff",txt:"Anyone up for the flea market at Mauerpark?",t:"31min",p:.55,hot:true},
+                                {av:"S",avc:"#10b981",n:"Sara",age:21,city:"Prenzlauer",int:"🌿 Chill",ic:"rgba(110,231,183,.12)",it:"#6ee7b7",txt:"Looking for a café and good conversation",t:"1h",p:.3,hot:false},
+                            ].map((c,i)=>(
+                                <div className="mcard" key={i}>
+                                    {c.hot ? <div className="mhot">🔥 Happening now</div> : <div style={{marginBottom:6}}/>}
+                                    <div className="mrow">
+                                        <div className="mav" style={{background:`linear-gradient(135deg,${c.avc},${c.avc}88)`}}>{c.av}</div>
+                                        <div><div className="mname">{c.n}, {c.age}</div><div className="msub">{c.city} · {c.t} left</div></div>
+                                    </div>
+                                    <div className="mint" style={{background:c.ic,border:`1px solid ${c.it}30`,color:c.it}}>{c.int}</div>
+                                    <div className="mtxt">{c.txt}</div>
+                                    <div className="mprog"><div className="mpf" style={{width:`${c.p*100}%`,background:c.it}}/></div>
+                                    <div className="mbtn">Request to join →</div>
+                                </div>
+                            ))}
                         </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{pendingCount}</span>
-                    </div>
-                </button>
-            )}
-            <div className="space-y-2">
-                <p className="text-sm font-medium text-[#A1A1AA] px-1">Active chats</p>
-                {acceptedChats.length === 0 && (
-                    <div className="text-center py-16 space-y-4">
-                        <div className="w-16 h-16 mx-auto rounded-2xl bg-white/5 flex items-center justify-center text-2xl">💬</div>
-                        <div className="space-y-1">
-                            <h3 className="text-base font-semibold text-white">No chats yet</h3>
-                            <p className="text-sm text-[#A1A1AA]">Join a post to start chatting</p>
-                        </div>
-                        <button onClick={() => setNavTab("feed")}
-                                style={{ minHeight: 44 }}
-                                className="px-5 rounded-xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all">
-                            Browse feed
-                        </button>
-                    </div>
-                )}
-                {acceptedChats.map((req) => {
-                    // Show the OTHER person's name — not always the sender
-                    const otherName = user?.uid === req.senderUserId
-                        ? (req.receiverUserName || "User")
-                        : req.senderUserName;
-                    // Chat URL always uses senderUserId (that's the key)
-                    const chatUrl = `/chat/${req.postId}_${req.senderUserId}`;
-                    return (
-                        <button key={req.id} onClick={() => router.push(chatUrl)}
-                                style={{ minHeight: 72 }}
-                                className="w-full flex items-center gap-3 bg-[#111118] border border-white/[0.06] rounded-2xl p-4 active:scale-[0.99] transition-all text-left">
-                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-base font-semibold text-white shrink-0">
-                                {otherName[0]?.toUpperCase()}
+                    <div className="psh side">
+                        <div className="pnotch"/>
+                        <div className="pbody">
+                            <div className="mchd">
+                                <div className="mav" style={{width:30,height:30,background:"linear-gradient(135deg,#4F7FFF,#1D4ED8)"}}>A</div>
+                                <div><div className="mname">Alex</div><div className="msub" style={{color:"#22c55e"}}>● online</div></div>
                             </div>
-                            <div className="flex-1 min-w-0">
-                                <p className="text-[15px] font-medium text-white truncate">{otherName}</p>
-                                <p className="text-xs text-[#A1A1AA] truncate mt-0.5">Re: {req.postText}</p>
-                            </div>
-                            <span className="text-xs bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-full font-semibold">Active</span>
-                        </button>
-                    );
-                })}
-            </div>
-        </div>
-    );
-
-    const ProfileTab = () => {
-        const myPosts  = allPosts.filter((p) => p.userId === user.uid);
-        const myActive = myPosts.filter((p) => isActive(p.expiresAt));
-
-        // Local edit state
-        const [editing, setEditing]       = useState(false);
-        const [editAge, setEditAge]       = useState(userProfile?.age?.toString() ?? "");
-        const [editBio, setEditBio]       = useState(userProfile?.bio ?? "");
-        const [editLangs, setEditLangs]   = useState<string[]>(userProfile?.languages ?? []);
-        const [saving, setSaving]         = useState(false);
-
-        const toggleLang = (lang: string) =>
-            setEditLangs((prev) => prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang]);
-
-        const handleSave = async () => {
-            setSaving(true);
-            try {
-                const { saveUserProfile, LANGUAGE_OPTIONS: _ } = await import("../lib/profile");
-                await saveUserProfile({
-                    uid: user.uid,
-                    displayName: user.displayName ?? "Anonymous",
-                    email: user.email ?? "",
-                    photoURL: user.photoURL,
-                    age: editAge ? parseInt(editAge) : null,
-                    bio: editBio.trim(),
-                    languages: editLangs,
-                });
-                // Refresh local profile
-                const { getUserProfile } = await import("../lib/profile");
-                const updated = await getUserProfile(user.uid);
-                setUserProfile(updated);
-                setEditing(false);
-            } catch (e) {
-                console.error(e);
-            } finally {
-                setSaving(false);
-            }
-        };
-
-        // Sync edit fields when userProfile loads
-        useEffect(() => {
-            if (userProfile) {
-                setEditAge(userProfile.age?.toString() ?? "");
-                setEditBio(userProfile.bio ?? "");
-                setEditLangs(userProfile.languages ?? []);
-            }
-            // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [userProfile?.uid]);
-
-        return (
-            <div className="space-y-6 max-w-md mx-auto">
-
-                {/* Avatar + name */}
-                <div className="flex flex-col items-center gap-3 pt-2">
-                    {user.photoURL
-                        ? <Image src={user.photoURL} alt={user.displayName ?? "User"} width={80} height={80} className="rounded-full ring-4 ring-blue-500/20" />
-                        : <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-3xl font-bold text-white">{user.displayName?.[0]}</div>
-                    }
-                    <div className="text-center">
-                        <p className="text-xl font-bold text-white">{user.displayName}</p>
-                        <p className="text-sm text-[#A1A1AA]">{user.email}</p>
-                    </div>
-                </div>
-
-                {/* Profile completeness nudge — only if empty */}
-                {!userProfile?.bio && !userProfile?.age && !editing && (
-                    <button onClick={() => setEditing(true)}
-                            className="w-full bg-blue-500/10 border border-blue-500/25 border-dashed rounded-2xl px-4 py-4 flex items-center gap-3 active:scale-[0.99] transition-all text-left">
-                        <div className="w-9 h-9 rounded-full bg-blue-500/20 flex items-center justify-center text-base shrink-0">✏️</div>
-                        <div>
-                            <p className="text-sm font-semibold text-white">Complete your profile</p>
-                            <p className="text-xs text-[#A1A1AA]">Add age, bio and languages — builds trust with others</p>
-                        </div>
-                        <span className="ml-auto text-blue-400 text-sm shrink-0">→</span>
-                    </button>
-                )}
-
-                {/* Profile info (view mode) */}
-                {!editing && (userProfile?.bio || userProfile?.age || (userProfile?.languages?.length ?? 0) > 0) && (
-                    <div className="bg-[#111118] border border-white/[0.06] rounded-2xl p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                            <p className="text-xs font-semibold text-[#A1A1AA] uppercase tracking-wider">Your profile</p>
-                            <button onClick={() => setEditing(true)} className="text-xs text-blue-400 font-medium hover:text-blue-300 transition-colors">Edit</button>
-                        </div>
-                        {userProfile?.age && (
-                            <div className="flex items-center gap-2 text-sm text-white">
-                                <span className="text-[#A1A1AA] w-16 text-xs">Age</span>
-                                <span className="font-medium">{userProfile.age}</span>
-                            </div>
-                        )}
-                        {userProfile?.bio && (
-                            <div className="flex items-start gap-2 text-sm text-white">
-                                <span className="text-[#A1A1AA] w-16 text-xs shrink-0 mt-0.5">Bio</span>
-                                <span className="leading-relaxed">{userProfile.bio}</span>
-                            </div>
-                        )}
-                        {(userProfile?.languages?.length ?? 0) > 0 && (
-                            <div className="flex items-start gap-2">
-                                <span className="text-[#A1A1AA] w-16 text-xs shrink-0 mt-1">Speaks</span>
-                                <div className="flex flex-wrap gap-1.5">
-                                    {userProfile!.languages.map((l) => (
-                                        <span key={l} className="bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold px-2 py-0.5 rounded-full">{l}</span>
-                                    ))}
+                            {[
+                                {me:false,t:"Hey! Near the entrance, blue hoodie 👋"},
+                                {me:true, t:"I can see you! Walking over"},
+                                {me:false,t:"This is wild haha 😄"},
+                                {me:true, t:"SwayNow magic — what do you want to see first?"},
+                            ].map((b,i)=>(
+                                <div className={`mbbl${b.me?" me":""}`} key={i}>
+                                    <div className={`mbt${b.me?" me":" them"}`}>{b.t}</div>
+                                </div>
+                            ))}
+                            <div className="mrev">
+                                <div style={{fontSize:9,color:"#6b7fff",marginBottom:6,fontWeight:600}}>Did you two meet? ⭐</div>
+                                <div style={{display:"flex",gap:6}}>
+                                    <div style={{flex:1,background:"rgba(16,185,129,.1)",border:"1px solid rgba(16,185,129,.2)",borderRadius:7,padding:"5px 0",fontSize:9,color:"#6ee7b7",textAlign:"center",fontWeight:700}}>✅ Great</div>
+                                    <div style={{flex:1,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:7,padding:"5px 0",fontSize:9,color:"#52525b",textAlign:"center"}}>Skip</div>
                                 </div>
                             </div>
-                        )}
+                        </div>
                     </div>
-                )}
+                </div>
+            </section>
 
-                {/* Profile edit form */}
-                {editing && (
-                    <div className="bg-[#111118] border border-white/[0.06] rounded-2xl p-4 space-y-5">
-                        <div className="flex items-center justify-between">
-                            <p className="text-sm font-semibold text-white">Edit profile</p>
-                            <button onClick={() => setEditing(false)} className="text-xs text-[#A1A1AA] hover:text-white transition-colors">Cancel</button>
+            {/* MARQUEE */}
+            <div className="mqw">
+                <div className="mqt">
+                    {[0,1].map(ri=>MARQUEE.map((m,i)=>(
+                        <div className="mqi" key={`${ri}-${i}`}>{m}<span className="mqs">·</span></div>
+                    )))}
+                </div>
+            </div>
+
+            {/* PROBLEM */}
+            <section className="sec">
+                <div className="wrap">
+                    <div id="ins" data-reveal className="ig">
+                        <div className={r("ins")}>
+                            <div className="stag">The problem</div>
+                            <div className="bq">You&apos;re somewhere new.<br/>Your contacts are busy.<br/><em>The moment passes alone.</em></div>
+                            <p className="ip">Every app you have was built for people you already know. None of them were built for the moment you&apos;re standing somewhere exciting — and wanting someone to share it with.</p>
+                            <p className="ip">SwayNow is that missing layer. The spontaneous social layer.</p>
                         </div>
-
-                        {/* Age */}
-                        <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-[#A1A1AA]">Age <span className="text-[#52525B]">(optional)</span></label>
-                            <input type="number" inputMode="numeric" value={editAge}
-                                   onChange={(e) => setEditAge(e.target.value.replace(/\D/g, ""))}
-                                   placeholder="e.g. 24" min={16} max={100}
-                                   style={{ minHeight: 44 }}
-                                   className="w-full bg-[#0B0B0F] border border-white/8 rounded-xl px-4 py-3 text-sm text-white placeholder-[#52525B] outline-none focus:border-blue-500 transition-colors" />
+                        <div className={`ir ${r("ins",200)}`}>
+                            {INSIGHTS.map(ins=>(
+                                <div className="icard" key={ins.h}>
+                                    <div className="iem">{ins.em}</div>
+                                    <div><div className="ih">{ins.h}</div><div className="ipdesc">{ins.p}</div></div>
+                                </div>
+                            ))}
                         </div>
+                    </div>
+                </div>
+            </section>
 
-                        {/* Bio */}
-                        <div className="space-y-1.5">
-                            <label className="text-xs font-medium text-[#A1A1AA]">Bio <span className="text-[#52525B]">(optional)</span></label>
-                            <textarea value={editBio} onChange={(e) => setEditBio(e.target.value)}
-                                      placeholder="A quick line about yourself…" maxLength={140} rows={2}
-                                      className="w-full bg-[#0B0B0F] border border-white/8 rounded-xl px-4 py-3 text-sm text-white placeholder-[#52525B] outline-none focus:border-blue-500 transition-colors resize-none" />
-                            <p className="text-right text-xs text-[#52525B]">{editBio.length}/140</p>
+            {/* HOW IT WORKS */}
+            <section className="sec" id="how" style={{paddingTop:0}}>
+                <div className="wrap">
+                    <div id="howh" data-reveal>
+                        <div className={`stag ${r("howh")}`}>How it works</div>
+                        <h2 className={`sh2 ${r("howh",100)}`}>Three steps.<br/>One real meetup.</h2>
+                        <p className={`sdesc ${r("howh",200)}`}>No algorithm. No matching queue. No waiting for someone to swipe back. Just real-time posts from people near you, right now.</p>
+                    </div>
+                    <div id="howg" data-reveal className={`sg ${r("howg",100)}`}>
+                        {STEPS.map(s=>(
+                            <div className="sc" key={s.n} data-n={s.n}>
+                                <div className="sn">Step {s.n}</div>
+                                <div className="si">{s.em}</div>
+                                <div className="sh">{s.h}</div>
+                                <div className="sp">{s.p}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
+            {/* FEATURES */}
+            <section className="sec" id="features" style={{paddingTop:0}}>
+                <div className="wrap">
+                    <div id="feath" data-reveal>
+                        <div className={`stag ${r("feath")}`}>Features</div>
+                        <h2 className={`sh2 ${r("feath",100)}`}>Everything you need.<br/><em>Nothing you don&apos;t.</em></h2>
+                    </div>
+                    <div id="featg" data-reveal className={`fg ${r("featg",100)}`}>
+                        {FEATURES.map(f=>(
+                            <div className="fc" key={f.h}>
+                                <div className="fem">{f.em}</div>
+                                <div className="fh">{f.h}</div>
+                                <div className="fp">{f.p}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
+            {/* FOUNDER */}
+            <section className="sec" id="about" style={{paddingTop:0}}>
+                <div className="wrap">
+                    <div id="foundh" data-reveal>
+                        <div className={`stag ${r("foundh")}`}>The founder</div>
+                        <h2 className={`sh2 ${r("foundh",100)}`}>Built by someone<br/>who felt the gap.</h2>
+                    </div>
+                    <div id="foundc" data-reveal className={`fw ${r("foundc",150)}`}>
+                        <div>
+                            <div className="fq">&ldquo;I moved to Berlin as a student. I had <em>no one</em> to explore the city with. That feeling — being somewhere exciting and experiencing it alone — is exactly what SwayNow is built to solve.&rdquo;</div>
+                            <p className="fb">SwayNow isn&apos;t built around metrics or growth hacks. It&apos;s built around a genuine belief: that the best experiences happen when you say yes to an unexpected person. Every feature exists because I needed it myself.</p>
+                            <div className="fsig">— Kartik Kushwaha, Founder</div>
                         </div>
-
-                        {/* Languages */}
-                        <div className="space-y-2">
-                            <label className="text-xs font-medium text-[#A1A1AA]">Languages <span className="text-[#52525B]">(optional)</span></label>
-                            <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
-                                {(["English","German","French","Spanish","Italian","Portuguese","Dutch","Russian","Polish","Turkish","Arabic","Hindi","Mandarin","Japanese","Korean","Vietnamese","Thai","Indonesian","Hindi","Punjabi","Urdu","Bengali","Tamil","Telugu","Filipino","Swahili","Greek","Czech","Swedish","Norwegian","Danish","Finnish","Romanian","Hungarian","Ukrainian","Hebrew","Cantonese"]).map((lang) => (
-                                    <button key={lang} onClick={() => toggleLang(lang)}
-                                            style={{ minHeight: 32 }}
-                                            className={`px-3 rounded-full text-xs font-medium border transition-all active:scale-[0.96] ${editLangs.includes(lang) ? "bg-blue-500 border-blue-500 text-white" : "bg-[#0B0B0F] border-white/8 text-[#A1A1AA]"}`}>
-                                        {editLangs.includes(lang) && "✓ "}{lang}
-                                    </button>
+                        <div className="fcr">
+                            <div className="fav">K</div>
+                            <div className="fn">Kartik Kushwaha</div>
+                            <div className="ft">Founder · SwayNow</div>
+                            <div className="fchips">
+                                {["Berlin","HTW Berlin","Media Informatics","Solo founder","From India"].map(c=>(
+                                    <span className="fch" key={c}>{c}</span>
                                 ))}
                             </div>
                         </div>
-
-                        {/* Save */}
-                        <button onClick={handleSave} disabled={saving}
-                                style={{ minHeight: 48 }}
-                                className="w-full rounded-xl bg-blue-500 text-white text-sm font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                            {saving && <div className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin" />}
-                            {saving ? "Saving…" : "Save profile"}
-                        </button>
                     </div>
-                )}
+                </div>
+            </section>
 
-                {/* Stats */}
-                <div className="grid grid-cols-2 gap-3">
-                    {[
-                        { label: "Posts", value: myPosts.length, icon: "✍️" },
-                        { label: "Active now", value: myActive.length, icon: "🟢" },
-                        { label: "Open chats", value: acceptedChats.length, icon: "💬" },
-                        { label: "Requests", value: pendingCount, icon: "📬" },
-                    ].map((s) => (
-                        <div key={s.label} className="bg-[#111118] border border-white/[0.06] rounded-2xl p-4 space-y-1">
-                            <p className="text-base">{s.icon}</p>
-                            <p className="text-2xl font-bold text-white">{s.value}</p>
-                            <p className="text-xs text-[#A1A1AA]">{s.label}</p>
+            {/* CTA */}
+            <section className="ctas">
+                <div className="ctag"/>
+                <div className="wrap">
+                    <div id="ctab" data-reveal className={r("ctab")}>
+                        <div className="ctai">
+                            <div className="eyebrow" style={{marginBottom:28}}>
+                                <span className="edot"/>Available in your city right now
+                            </div>
+                            <h2 className="ctah">Right plans.<br/><em>Right now.</em></h2>
+                            <p className="ctap">Someone nearby is looking for exactly what you&apos;re looking for.<br/>Open SwayNow and find them.</p>
+                            <Link href="/app" className="btn-m" style={{fontSize:17,padding:"18px 48px",display:"inline-flex"}}>
+                                Open SwayNow
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" style={{width:18,height:18}}><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                            </Link>
+                            <p style={{marginTop:20,fontSize:13,color:"#2a2a3a"}}>Works on iPhone & Android · Add to home screen · No App Store needed</p>
                         </div>
-                    ))}
-                </div>
-
-                {/* Actions */}
-                <div className="space-y-2">
-                    <button onClick={() => router.push(`/profile/${user.uid}`)}
-                            style={{ minHeight: 52 }}
-                            className="w-full flex items-center justify-between bg-[#111118] border border-white/[0.06] rounded-2xl px-4 py-3 active:scale-[0.99] transition-all">
-                        <span className="text-sm text-white font-medium">👤 View public profile</span>
-                        <span className="text-[#52525B]">→</span>
-                    </button>
-                    <button onClick={() => router.push("/requests")}
-                            style={{ minHeight: 52 }}
-                            className="w-full flex items-center justify-between bg-[#111118] border border-white/[0.06] rounded-2xl px-4 py-3 active:scale-[0.99] transition-all">
-                        <span className="text-sm text-white font-medium">📬 Manage requests</span>
-                        {pendingCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{pendingCount}</span>}
-                    </button>
-                    <button onClick={handleLogout}
-                            style={{ minHeight: 52 }}
-                            className="w-full flex items-center justify-between bg-[#111118] border border-white/[0.06] rounded-2xl px-4 py-3 active:scale-[0.99] transition-all hover:border-red-500/30">
-                        <span className="text-sm text-red-400 font-medium">Sign out</span>
-                    </button>
-                </div>
-
-                <div className="pt-4 border-t border-white/5 flex items-center justify-center gap-4 text-xs text-[#52525B]">
-                    <a href="/legal/terms" className="hover:text-[#A1A1AA] transition-colors">Terms</a>
-                    <span>·</span>
-                    <a href="/legal/privacy" className="hover:text-[#A1A1AA] transition-colors">Privacy</a>
-                </div>
-            </div>
-        );
-    };
-
-    // ════════════════════════════════════════════════════════
-    //  APP SHELL
-    // ════════════════════════════════════════════════════════
-
-    return (
-        <main className="min-h-screen bg-[#0B0B0F] text-white flex flex-col">
-            {/* Toast notification */}
-            {toast && (
-                <div
-                    className="fixed top-4 left-4 right-4 z-50 max-w-sm mx-auto"
-                    onClick={() => { if (toast.chatId) router.push(`/chat/${toast.chatId}`); else if (toast.route) router.push(toast.route); setToast(null); }}
-                >
-                    <div className="bg-[#1a1a2e] border border-blue-500/30 rounded-2xl px-4 py-3 shadow-2xl flex items-start gap-3 cursor-pointer active:scale-[0.98] transition-all">
-                        <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0 text-base mt-0.5">🔔</div>
-                        <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-white">{toast.title}</p>
-                            <p className="text-xs text-[#A1A1AA] mt-0.5 leading-relaxed">{toast.body}</p>
-                        </div>
-                        <button onClick={(e) => { e.stopPropagation(); setToast(null); }} className="text-[#52525B] hover:text-white transition-colors shrink-0 mt-0.5">✕</button>
                     </div>
                 </div>
-            )}
+            </section>
 
-            {/* Sticky header */}
-            <header className="sticky top-0 z-20 flex items-center justify-between px-4 py-3 bg-[#0B0B0F]/90 backdrop-blur-md border-b border-white/[0.06]">
-                <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-                        </svg>
-                    </div>
-                    <span className="text-lg font-bold tracking-tight" style={{letterSpacing:"-0.03em"}}>SwayNow</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    {/* Share / invite */}
-                    <button
-                        onClick={handleShareApp}
-                        style={{ minHeight: 36, minWidth: 36 }}
-                        className="rounded-full flex items-center justify-center text-[#A1A1AA] hover:text-white transition-colors active:scale-95"
-                        aria-label="Invite friends"
-                    >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-                            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                        </svg>
-                    </button>
-
-                    {/* Notification bell */}
-                    <button
-                        onClick={() => setNavTab("chats")}
-                        style={{ minHeight: 36, minWidth: 36 }}
-                        className="relative rounded-full flex items-center justify-center text-[#A1A1AA] hover:text-white transition-colors active:scale-95"
-                    >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-                        </svg>
-                        {pendingCount > 0 && (
-                            <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold text-white border-2 border-[#0B0B0F]">
-                {pendingCount > 9 ? "9+" : pendingCount}
-              </span>
-                        )}
-                    </button>
-                    {user.photoURL && (
-                        <button onClick={() => setNavTab("profile")} style={{ minHeight: 36, minWidth: 36 }} className="rounded-full transition-all active:scale-95">
-                            <Image src={user.photoURL} alt="You" width={32} height={32} className="rounded-full ring-2 ring-white/10" />
-                        </button>
-                    )}
-                </div>
-            </header>
-
-            {/* Page content */}
-            <div className="flex-1 overflow-y-auto px-4 sm:px-6 pt-4 pb-32 max-w-2xl w-full mx-auto">
-                {navTab === "feed"    && <FeedTab />}
-                {navTab === "explore" && <ExploreTab />}
-                {navTab === "post"    && (
-                    <PostTabComponent
-                        text={text} setText={setText}
-                        intent={intent} setIntent={setIntent}
-                        duration={duration} setDuration={setDuration}
-                        city={city} setCity={setCity}
-                        posting={posting} postError={postError} postSuccess={postSuccess}
-                        onPost={handlePost}
-                    />
-                )}
-                {navTab === "chats"   && <ChatsTab />}
-                {navTab === "profile" && <ProfileTab />}
-            </div>
-
-            {/* Bottom navigation */}
-            <nav className="fixed bottom-0 left-0 right-0 z-20 bg-[#0B0B0F]/95 backdrop-blur-md border-t border-white/[0.06]" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-                <div className="flex items-center justify-around px-2 py-2 max-w-2xl mx-auto">
-                    {(["feed","explore","post","chats","profile"] as NavTab[]).map((t) => {
-                        const isActive = navTab === t;
-                        const isPost   = t === "post";
-                        const hasBadge = t === "chats" && pendingCount > 0;
-                        const label = t === "feed" ? "Nearby" : t === "explore" ? "Explore" : t === "post" ? "Post" : t === "chats" ? "Chats" : "Profile";
-                        return (
-                            <button key={t} onClick={() => setNavTab(t)}
-                                    style={{ minHeight: 56, minWidth: 56 }}
-                                    className={`flex flex-col items-center justify-center gap-0.5 px-3 py-2 rounded-2xl transition-all active:scale-95 relative ${
-                                        isPost ? "bg-blue-500 text-white -mt-5 shadow-xl shadow-blue-500/30 w-14 h-14"
-                                            : isActive ? "text-white" : "text-[#52525B]"
-                                    }`}>
-                                {hasBadge && (
-                                    <span className="absolute top-0 right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center font-bold text-white border-2 border-[#0B0B0F]">{pendingCount}</span>
-                                )}
-                                {t === "post" ? NavIcons.post() :
-                                    t === "feed" ? NavIcons.feed(isActive) :
-                                        t === "explore" ? NavIcons.explore(isActive) :
-                                            t === "chats" ? NavIcons.chats(isActive) :
-                                                NavIcons.profile(isActive)}
-                                {!isPost && (
-                                    <span className="text-[10px] font-semibold tracking-tight">{label}</span>
-                                )}
-                            </button>
-                        );
-                    })}
-                </div>
-            </nav>
-        </main>
+            {/* FOOTER */}
+            <footer className="footer">
+                <Link href="/" className="fl"><span>Sway</span>Now</Link>
+                <ul className="flinks">
+                    <li><a href="#how">How it works</a></li>
+                    <li><Link href="/app">Open app</Link></li>
+                    <li><Link href="/legal/privacy">Privacy</Link></li>
+                    <li><Link href="/legal/terms">Terms</Link></li>
+                </ul>
+                <span className="fcp">© 2026 SwayNow · Made in Berlin</span>
+            </footer>
+        </>
     );
 }
 
-function GoogleIcon() {
-    return (
-        <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
-            <path d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" fill="#FFC107"/>
-            <path d="M6.306 14.691l6.571 4.819C14.655 15.108 19.001 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" fill="#FF3D00"/>
-            <path d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" fill="#4CAF50"/>
-            <path d="M43.611 20.083H42V20H24v8h11.303a11.96 11.96 0 01-4.087 5.571l6.19 5.237C42.012 35.245 44 30 44 24c0-1.341-.138-2.65-.389-3.917z" fill="#1976D2"/>
-        </svg>
-    );
-}
+const VIBES = [
+    "Find your people, anywhere.",
+    "Right plans. Right now.",
+    "Your friends are busy. Someone nearby isn't.",
+    "Stop scrolling. Start meeting.",
+    "The city is full of people. Go find them.",
+];
+
+const MARQUEE = [
+    "Real meetups","5km radius","Travellers & locals",
+    "Berlin · Amsterdam · Paris · Barcelona · London",
+    "Posts expire in 4h","Trust reviews","No swiping",
+    "Students & expats","Explore together","Spontaneous by design",
+];
+
+const INSIGHTS = [
+    {em:"🗺️",h:"Dating apps aren't the answer",p:"You don't want a date. You want someone to explore the flea market with. There was no app for that. Until now."},
+    {em:"⚡",h:"Social media is too passive",p:"By the time someone responds to your post, the moment has passed. SwayNow is built for right now — posts expire in hours."},
+    {em:"🌍",h:"Perfect for travellers & expats",p:"New city, no contacts. SwayNow fills that gap instantly — connecting you with locals and other travellers who are out right now."},
+];
+
+const STEPS = [
+    {n:"01",em:"📍",h:"Post what you're doing",p:"Takes 10 seconds. Tell people what you're up to — exploring, grabbing coffee, hitting the gym. Set a duration. Post it."},
+    {n:"02",em:"👋",h:"Someone nearby requests to join",p:"People within 5km see your post in real time. They send a join request. You accept. Chat opens instantly — no waiting."},
+    {n:"03",em:"🤝",h:"Meet. Leave a review.",p:"Go meet them in real life. Afterwards, leave an honest review on their profile. Trust is earned, not assumed."},
+];
+
+const FEATURES = [
+    {em:"⏳",h:"Posts that expire",p:"Every post disappears after 15 min, 1 hour, or 4 hours. No dead posts. No clutter. Only what's happening right now."},
+    {em:"📍",h:"5 km radius feed",p:"You only see people within walking distance. Proximity makes meetups actually happen — not just conversations."},
+    {em:"⭐",h:"Public trust reviews",p:"After meeting someone, leave a short review on their profile. Real accountability. You know who you're meeting before you go."},
+    {em:"🔔",h:"Instant notifications",p:"Someone wants to join your post? You know immediately. The whole point is spontaneous — not 3 hours later."},
+    {em:"🗺️",h:"Explore any city",p:"Browse posts in Berlin, Amsterdam, Lisbon — anywhere. Perfect for when you land somewhere new and want to hit the ground running."},
+    {em:"🔒",h:"Block & report",p:"One tap to block anyone. Every report is reviewed. Your safety is a non-negotiable, not an afterthought."},
+];

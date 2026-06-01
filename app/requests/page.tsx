@@ -23,7 +23,7 @@ export default function RequestsPage() {
         auth.authStateReady().then(() => {
             const currentUser = auth.currentUser;
             if (!currentUser) {
-                router.push("/");
+                router.push("/app");
                 return;
             }
             setUser(currentUser);
@@ -32,7 +32,7 @@ export default function RequestsPage() {
 
         // Also listen for changes (logout etc)
         const unsub = onAuthStateChanged(auth, (u) => {
-            if (authReady && !u) router.push("/");
+            if (authReady && !u) router.push("/app");
         });
         return () => unsub();
         // eslint-disable-next-line react-hooks/exhaustive-deps

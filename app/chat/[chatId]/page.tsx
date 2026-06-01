@@ -50,7 +50,7 @@ export default function ChatPage() {
 	useEffect(() => {
 		auth.authStateReady().then(async () => {
 			const u = auth.currentUser;
-			if (!u) { router.push("/"); return; }
+			if (!u) { router.push("/app"); return; }
 			setUser(u);
 
 			// Now verify immediately while we have the user
