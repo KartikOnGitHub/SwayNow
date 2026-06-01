@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import InstallPrompt from "./components/InstallPrompt";
+import InstallGuide from "./components/InstallGuide";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -83,7 +83,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.json",
   verification: {
     // 🔧 Add your Google Search Console verification code here
-    google: "8SlgyRBk8wJb_QWUspAJ1M9Zk8q-A1LDkSv7WoC0dsI",
+    // google: "your-google-verification-code",
   },
 };
 
@@ -166,7 +166,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}
       >
       {children}
-      <InstallPrompt />
+      <InstallGuide />
       </body>
       </html>
   );
