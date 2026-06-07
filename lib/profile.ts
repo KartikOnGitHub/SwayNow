@@ -14,10 +14,19 @@ export interface UserProfile {
     age: number | null;
     gender: Gender | null;
     languages: string[];
+    interests: string[];
     bio: string;
     onboardedAt: Timestamp | null;
     updatedAt: Timestamp | null;
 }
+
+export const INTEREST_OPTIONS = [
+    "☕ Coffee","🍻 Drinks","🍜 Food","🧭 Exploring","🎨 Art","📚 Reading",
+    "🏀 Basketball","⚽ Football","🏃 Running","🧗 Climbing","🚴 Cycling","🏋️ Gym",
+    "🎮 Gaming","🎸 Music","🎬 Movies","📷 Photography","💃 Dancing","🧘 Yoga",
+    "🌍 Travel","🗣️ Languages","💻 Tech","📈 Startups","🐶 Animals","🌱 Nature",
+    "🛹 Skating","🎤 Nightlife","🧩 Board games","✏️ Studying",
+];
 
 export const LANGUAGE_OPTIONS = [
     "English","German","French","Spanish","Italian","Portuguese","Dutch",

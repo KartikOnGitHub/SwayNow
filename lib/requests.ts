@@ -264,12 +264,11 @@ export async function saveInteraction(
     });
 }
 
-export async function getTrustScore(userId: string): Promise<TrustScore> {
-    const snap = await getDocs(query(
-        collection(db, "interactions"),
-        where("otherUserId", "==", userId),
-        where("met",         "==", true)
-    ));
+export async function getTrustScore(userId: string): Promise<TrustScore> {  const snap = await getDocs(query(
+    collection(db, "interactions"),
+    where("otherUserId", "==", userId),
+    where("met",         "==", true)
+));
     const metCount      = snap.size;
     const positiveCount = snap.docs.filter((d) => d.data().positive === true).length;
     return { metCount, positiveCount };
@@ -295,4 +294,36 @@ export async function getReviews(userId: string): Promise<Review[]> {
             createdAt:   d.data().createdAt  ?? null,
         } as Review))
         .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+}
+
+// ── Edit / delete your own review ──────────────────────────
+// A review is the `review` field on an interaction doc the user authored.
+
+/** Delete the current user's review (the interaction stays, only the review text is removed). */
+export async function deleteReview(reviewId: string, currentUserId: string): Promise<void> {
+    const { deleteField } = await import("firebase/firestore");
+    const ref = doc(db, "interactions", reviewId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    if (snap.data().userId !== currentUserId) throw new Error("Not your review");
+    await updateDoc(ref, { review: deleteField() });
+}
+
+/** Edit the current user's review text. */
+export async function editReview(reviewId: string, currentUserId: string, newText: string): Promise<void> {
+    const ref = doc(db, "interactions", reviewId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    if (snap.data().userId !== currentUserId) throw new Error("Not your review");
+    await updateDoc(ref, { review: newText.trim() });
+}
+
+// ── Delete your own post ───────────────────────────────────
+export async function deletePost(postId: string, currentUserId: string): Promise<void> {
+    const ref = doc(db, "posts", postId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    if (snap.data().userId !== currentUserId) throw new Error("Not your post");
+    const { deleteDoc } = await import("firebase/firestore");
+    await deleteDoc(ref);
 }

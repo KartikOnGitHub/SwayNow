@@ -6,7 +6,7 @@ import Image from "next/image";
 import { onAuthStateChanged, getAuth } from "firebase/auth";
 import { collection, query, where, getDocs, orderBy, Timestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
-import { getReviews, getTrustScore, Review, TrustScore, blockUser, unblockUser, isUserBlocked } from "@/lib/requests";
+import { getReviews, getTrustScore, Review, TrustScore, blockUser, unblockUser, isUserBlocked, editReview, deleteReview } from "@/lib/requests";
 import { getUserProfile, UserProfile } from "@/lib/profile";
 import { isActive } from "@/lib/expiry";
 
@@ -29,6 +29,8 @@ export default function ProfilePage() {
     const [isBlocked, setIsBlocked]   = useState(false);
     const [blockLoading, setBlockLoading] = useState(false);
     const [currentUserId, setCurrentUserId] = useState("");
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [editText, setEditText]   = useState("");
 
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, async (u) => {
@@ -170,6 +172,20 @@ export default function ProfilePage() {
                         </div>
                     )}
 
+                    {/* Interests */}
+                    {profile?.interests && profile.interests.length > 0 && (
+                        <div className="space-y-2">
+                            <p className="text-xs font-semibold text-[#A1A1AA] uppercase tracking-wider">Into</p>
+                            <div className="flex flex-wrap gap-2">
+                                {profile.interests.map((it) => (
+                                    <span key={it} className="bg-[#1a1a24] border border-white/[0.08] text-white text-xs font-medium px-3 py-1.5 rounded-full">
+                    {it}
+                  </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     {/* Languages */}
                     {profile?.languages && profile.languages.length > 0 && (
                         <div className="space-y-2">
@@ -235,7 +251,55 @@ export default function ProfilePage() {
                                         <span className="text-xs text-[#52525B]">{fmt(rev.createdAt)}</span>
                                     </div>
                                 </div>
-                                <p className="text-sm text-white leading-relaxed pl-9">&quot;{rev.text}&quot;</p>
+
+                                {editingId === rev.id ? (
+                                    <div className="pl-9 space-y-2">
+                    <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        maxLength={240}
+                        rows={2}
+                        className="w-full rounded-xl bg-[#0B0B0F] border border-white/[0.1] px-3 py-2 text-sm text-white focus:border-blue-500/50 focus:outline-none resize-none"
+                    />
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={async () => {
+                                                    if (!editText.trim()) return;
+                                                    await editReview(rev.id, currentUserId, editText).catch(console.error);
+                                                    setReviews((prev) => prev.map((r) => r.id === rev.id ? { ...r, text: editText.trim() } : r));
+                                                    setEditingId(null);
+                                                }}
+                                                className="px-4 py-2 rounded-lg bg-blue-500 text-white text-xs font-semibold hover:bg-blue-600 transition-colors">
+                                                Save
+                                            </button>
+                                            <button onClick={() => setEditingId(null)}
+                                                    className="px-4 py-2 rounded-lg bg-white/5 text-[#A1A1AA] text-xs font-semibold hover:text-white transition-colors">
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-white leading-relaxed pl-9">&quot;{rev.text}&quot;</p>
+                                )}
+
+                                {currentUserId && currentUserId === rev.authorId && editingId !== rev.id && (
+                                    <div className="flex gap-3 pl-9 pt-1">
+                                        <button
+                                            onClick={() => { setEditingId(rev.id); setEditText(rev.text); }}
+                                            className="text-xs text-blue-400 hover:text-blue-300 transition-colors">
+                                            Edit
+                                        </button>
+                                        <button
+                                            onClick={async () => {
+                                                if (!confirm("Delete your review?")) return;
+                                                await deleteReview(rev.id, currentUserId).catch(console.error);
+                                                setReviews((prev) => prev.filter((r) => r.id !== rev.id));
+                                            }}
+                                            className="text-xs text-red-400 hover:text-red-300 transition-colors">
+                                            Delete
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </section>

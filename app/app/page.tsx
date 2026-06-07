@@ -15,11 +15,12 @@ import { auth, db } from "../../lib/firebase";
 import { getDistanceKm, formatDistance } from "../../lib/distance";
 import {
     sendJoinRequest, getAcceptedRequest, getPendingRequestId,
-    blockUser, unblockUser, reportUser, getTrustScore, TrustScore, ReportReason, JoinRequest, getBlockedUserIds,
+    blockUser, unblockUser, reportUser, getTrustScore, TrustScore, ReportReason, JoinRequest, getBlockedUserIds, deletePost,
 } from "../../lib/requests";
 import { Duration, DURATIONS, getExpiresAt, isActive, timeRemaining, lifeFraction } from "../../lib/expiry";
 import { requestNotificationPermission, onForegroundMessage } from "../../lib/notifications";
 import { shareApp } from "../../lib/share";
+import { INTEREST_OPTIONS } from "../../lib/profile";
 
 
 // ── Types ──────────────────────────────────────────────────
@@ -35,7 +36,7 @@ interface Post {
 interface NearbyPost extends Post { distanceKm: number; }
 
 // ── Constants ──────────────────────────────────────────────
-const RADIUS_KM = 5;
+
 
 const LOCATIONS: Record<string, string[]> = {
     "🇩🇪 Germany":["Berlin","Munich","Hamburg","Frankfurt","Cologne","Stuttgart","Düsseldorf"],
@@ -143,13 +144,14 @@ interface PostCardProps {
     onSetReportReason: (r: ReportReason) => void;
     onSetTrustScores: (fn: (prev: Record<string, TrustScore>) => Record<string, TrustScore>) => void;
     onNavigate: (path: string) => void;
+    onDelete: (postId: string) => void;
 }
 
 function PostCard({
                       post, currentUserId, joinedPosts, actingPost, trustScores,
                       reportingPost, reportReason, postActionMsg, acceptedPostIds,
                       onJoin, onBlock, onReport, onSetReporting, onSetReportReason,
-                      onSetTrustScores, onNavigate,
+                      onSetTrustScores, onNavigate, onDelete,
                   }: PostCardProps) {
     const style    = getIntentStyle(post.intent);
     const timeLeft = timeRemaining(post.expiresAt);
@@ -202,7 +204,7 @@ function PostCard({
                         <div className="w-11 h-11 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-base font-semibold text-white shrink-0 overflow-hidden relative">
                             {authorPhoto ? (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={authorPhoto} alt={post.userName} className="absolute inset-0 w-full h-full object-cover" />
+                                <img src={authorPhoto} alt={post.userName} referrerPolicy="no-referrer" className="absolute inset-0 w-full h-full object-cover" />
                             ) : (
                                 post.userName[0]?.toUpperCase()
                             )}
@@ -240,6 +242,21 @@ function PostCard({
                                 <button onClick={() => onBlock(post.userId, post.userName)}
                                         className="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-white/5 transition-colors border-t border-white/5 flex items-center gap-2">
                                     <span>🚫</span> Block
+                                </button>
+                            </div>
+                        </details>
+                    )}
+
+                    {isOwn && (
+                        <details className="relative shrink-0">
+                            <summary className="list-none cursor-pointer w-9 h-9 flex items-center justify-center text-[#52525B] hover:text-[#A1A1AA] active:bg-white/5 rounded-full transition-colors">
+                                <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+                            </summary>
+                            <div className="absolute right-0 top-10 bg-[#1a1a22] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-30 min-w-[160px]">
+                                <div className="px-4 py-2 text-xs text-[#52525B] border-b border-white/5">Your post</div>
+                                <button onClick={() => onDelete(post.id)}
+                                        className="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-white/5 transition-colors flex items-center gap-2">
+                                    <span>🗑️</span> Delete post
                                 </button>
                             </div>
                         </details>
@@ -455,12 +472,17 @@ export default function Home() {
     const [authError, setAuthError]     = useState<string | null>(null);
     const [navTab, setNavTab]           = useState<NavTab>("feed");
     const [userProfile, setUserProfile] = useState<import("../../lib/profile").UserProfile | null>(null);
+    const [needsProfile, setNeedsProfile] = useState(false);
+    const [obBio, setObBio]               = useState("");
+    const [obInterests, setObInterests]   = useState<string[]>([]);
+    const [obSaving, setObSaving]         = useState(false);
     const [editingProfile, setEditingProfile] = useState(false);
 
     const [allPosts, setAllPosts]               = useState<Post[]>([]);
     const [feedLoading, setFeedLoading]         = useState(true);
     const [userCoords, setUserCoords]           = useState<{ lat: number; lng: number } | null>(null);
     const [locationLoading, setLocationLoading] = useState(true);
+    const [radiusKm, setRadiusKm]               = useState(5);
     const [locationError, setLocationError]     = useState<string | null>(null);
 
     const [text, setText]               = useState("");
@@ -503,7 +525,6 @@ export default function Home() {
         const unsub = onAuthStateChanged(auth, async (u) => {
             setUser(u);
             if (u) {
-                // Auto-create user doc on first login so they show in admin
                 try {
                     const { doc, setDoc, getDoc, serverTimestamp: st } = await import("firebase/firestore");
                     const ref = doc(db, "users", u.uid);
@@ -517,10 +538,24 @@ export default function Home() {
                             age: null,
                             gender: null,
                             languages: [],
+                            interests: [],
                             bio: "",
                             createdAt: st(),
                             updatedAt: st(),
                         });
+                        setNeedsProfile(true);
+                    } else {
+                        const data = snap.data();
+                        // Always keep the Google photo fresh
+                        if (u.photoURL && data.photoURL !== u.photoURL) {
+                            await setDoc(ref, { photoURL: u.photoURL, updatedAt: st() }, { merge: true });
+                        }
+                        const { getUserProfile } = await import("../../lib/profile");
+                        const prof = await getUserProfile(u.uid);
+                        setUserProfile(prof);
+                        // Mandatory: must have a bio AND at least one interest
+                        const incomplete = !prof?.bio?.trim() || !(prof?.interests?.length);
+                        setNeedsProfile(incomplete);
                     }
                 } catch (e) { console.warn("User doc create error:", e); }
             }
@@ -676,7 +711,7 @@ export default function Home() {
         .filter((p) => p.expiresAt && isActive(p.expiresAt))
         .filter((p) => !blockedIds.has(p.userId))
         .map((p) => ({ ...p, distanceKm: userCoords ? getDistanceKm(userCoords.lat, userCoords.lng, p.latitude, p.longitude) : -1 }))
-        .filter((p) => !userCoords || p.distanceKm <= RADIUS_KM)
+        .filter((p) => !userCoords || p.distanceKm <= radiusKm)
         .sort((a, b) => (a.distanceKm < 0 ? 0 : a.distanceKm - b.distanceKm));
 
     const explorePosts: NearbyPost[] = allPosts
@@ -699,6 +734,44 @@ export default function Home() {
     };
 
     const handleLogout = async () => { await signOut(auth).catch(console.error); };
+
+    const handleDeletePost = async (postId: string) => {
+        if (!user) return;
+        if (!confirm("Delete this post? This can't be undone.")) return;
+        try {
+            await deletePost(postId, user.uid);
+            setAllPosts((prev) => prev.filter((p) => p.id !== postId));
+            setToast({ title: "Post deleted", body: "Your post has been removed." });
+            setTimeout(() => setToast(null), 3000);
+        } catch (e) {
+            console.error("Delete post failed:", e);
+            setToast({ title: "Couldn't delete", body: "Please try again." });
+            setTimeout(() => setToast(null), 3000);
+        }
+    };
+
+    const handleSaveOnboarding = async () => {
+        if (!user || !obBio.trim() || obInterests.length === 0) return;
+        setObSaving(true);
+        try {
+            const { saveUserProfile, getUserProfile } = await import("../../lib/profile");
+            await saveUserProfile({
+                uid: user.uid,
+                displayName: user.displayName ?? "Anonymous",
+                email: user.email ?? "",
+                photoURL: user.photoURL ?? null,
+                bio: obBio.trim(),
+                interests: obInterests,
+            });
+            const prof = await getUserProfile(user.uid);
+            setUserProfile(prof);
+            setNeedsProfile(false);
+        } catch (e) {
+            console.error("Onboarding save failed:", e);
+        } finally {
+            setObSaving(false);
+        }
+    };
 
     const handleShareApp = async () => {
         const result = await shareApp();
@@ -792,6 +865,7 @@ export default function Home() {
         onJoin: handleJoin, onBlock: handleBlock, onReport: handleReport,
         onSetReporting: setReportingPost, onSetReportReason: setReportReason,
         onSetTrustScores: setTrustScores, onNavigate: router.push,
+        onDelete: handleDeletePost,
     });
 
     // ── Loading ─────────────────────────────────────────────
@@ -843,9 +917,71 @@ export default function Home() {
         </main>
     );
 
-    // ════════════════════════════════════════════════════════
-    //  Tab content components (defined here to access state)
-    // ════════════════════════════════════════════════════════
+    // ── Logged in but profile incomplete → mandatory setup ──
+    if (needsProfile) return (
+        <main className="min-h-screen bg-[#0B0B0F] text-white">
+            <div className="max-w-md mx-auto w-full px-6 py-10">
+                <div className="flex items-center gap-3 mb-8">
+                    {user.photoURL
+                        ? <img src={user.photoURL} alt="" className="w-14 h-14 rounded-full object-cover border border-white/10" referrerPolicy="no-referrer" />
+                        : <div className="w-14 h-14 rounded-full bg-blue-500/20 flex items-center justify-center text-xl font-bold">{(user.displayName ?? "?")[0]}</div>}
+                    <div>
+                        <p className="text-lg font-semibold text-white">Hi {user.displayName?.split(" ")[0] ?? "there"} 👋</p>
+                        <p className="text-sm text-[#A1A1AA]">Let&apos;s set up your profile so people know who they&apos;re meeting.</p>
+                    </div>
+                </div>
+
+                {/* Bio — required */}
+                <div className="mb-7">
+                    <label className="block text-sm font-semibold text-white mb-1.5">About you <span className="text-red-400">*</span></label>
+                    <p className="text-xs text-[#52525B] mb-2.5">A line or two — who you are, what you&apos;re into, what you&apos;re looking for.</p>
+                    <textarea
+                        value={obBio}
+                        onChange={(e) => setObBio(e.target.value)}
+                        maxLength={240}
+                        rows={3}
+                        placeholder="e.g. Student new to Berlin, love exploring cafés and bouldering. Always up for a spontaneous walk or coffee."
+                        className="w-full rounded-2xl bg-[#111118] border border-white/[0.08] px-4 py-3 text-sm text-white placeholder-[#52525B] focus:border-blue-500/50 focus:outline-none resize-none"
+                    />
+                    <p className="text-right text-xs text-[#52525B] mt-1">{obBio.length}/240</p>
+                </div>
+
+                {/* Interests — required */}
+                <div className="mb-8">
+                    <label className="block text-sm font-semibold text-white mb-1.5">Your interests <span className="text-red-400">*</span></label>
+                    <p className="text-xs text-[#52525B] mb-3">Pick a few — these show on your profile. ({obInterests.length} selected)</p>
+                    <div className="flex flex-wrap gap-2">
+                        {INTEREST_OPTIONS.map((it) => {
+                            const on = obInterests.includes(it);
+                            return (
+                                <button
+                                    key={it}
+                                    onClick={() => setObInterests((prev) => on ? prev.filter((x) => x !== it) : [...prev, it])}
+                                    className={`px-3 py-2 rounded-full text-xs font-medium transition-all active:scale-95 ${
+                                        on ? "bg-blue-500 text-white" : "bg-[#111118] border border-white/[0.08] text-[#A1A1AA] hover:text-white"
+                                    }`}
+                                >
+                                    {it}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <button
+                    onClick={handleSaveOnboarding}
+                    disabled={obSaving || !obBio.trim() || obInterests.length === 0}
+                    style={{ minHeight: 54 }}
+                    className="w-full rounded-2xl bg-blue-500 text-white text-base font-semibold hover:bg-blue-600 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-blue-500/20"
+                >
+                    {obSaving ? "Saving…" : "Enter SwayNow →"}
+                </button>
+                {(!obBio.trim() || obInterests.length === 0) && (
+                    <p className="text-center text-xs text-[#52525B] mt-3">Add a short bio and at least one interest to continue.</p>
+                )}
+            </div>
+        </main>
+    );
 
     const FeedTab = () => (
         <div className="space-y-4">
@@ -855,12 +991,35 @@ export default function Home() {
                 {!locationLoading && userCoords && (
                     <>
                         <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="text-[#A1A1AA] font-medium">Within {RADIUS_KM} km</span>
+                        <span className="text-[#A1A1AA] font-medium">Within {radiusKm} km</span>
                         <span className="text-[#52525B] ml-auto">{nearbyPosts.length} active</span>
                     </>
                 )}
                 {!locationLoading && locationError && <><div className="w-2 h-2 rounded-full bg-amber-500" /><span className="text-amber-500/80">Location off — showing all</span></>}
             </div>
+
+            {/* Radius selector */}
+            {!locationLoading && userCoords && (
+                <div className="flex items-center gap-2 px-1">
+                    <span className="text-xs text-[#52525B] shrink-0">Radius</span>
+                    <div className="flex gap-1.5 flex-1">
+                        {[5, 10, 15, 20].map((km) => (
+                            <button
+                                key={km}
+                                onClick={() => setRadiusKm(km)}
+                                style={{ minHeight: 36 }}
+                                className={`flex-1 rounded-xl text-xs font-semibold transition-all active:scale-95 ${
+                                    radiusKm === km
+                                        ? "bg-blue-500 text-white shadow-lg shadow-blue-500/20"
+                                        : "bg-[#111118] border border-white/[0.06] text-[#A1A1AA] hover:text-white"
+                                }`}
+                            >
+                                {km} km
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {feedLoading && (
                 <div className="flex justify-center py-20">
@@ -1187,6 +1346,12 @@ export default function Home() {
                             className="w-full flex items-center justify-between bg-[#111118] border border-white/[0.06] rounded-2xl px-4 py-3 active:scale-[0.99] transition-all">
                         <span className="text-sm text-white font-medium">📬 Manage requests</span>
                         {pendingCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{pendingCount}</span>}
+                    </button>
+                    <button onClick={() => { try { localStorage.removeItem("swaynow_visited"); localStorage.removeItem("swaynow_install_guide"); } catch {} window.location.reload(); }}
+                            style={{ minHeight: 52 }}
+                            className="w-full flex items-center justify-between bg-[#111118] border border-white/[0.06] rounded-2xl px-4 py-3 active:scale-[0.99] transition-all hover:border-blue-500/30">
+                        <span className="text-sm text-white font-medium">📲 Add SwayNow to home screen</span>
+                        <span className="text-xs text-blue-400">Show me how →</span>
                     </button>
                     <button onClick={handleLogout}
                             style={{ minHeight: 52 }}
