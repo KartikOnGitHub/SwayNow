@@ -380,25 +380,30 @@ export default function LandingPage() {
                 </div>
             </section>
 
-            {/* FOUNDER */}
+            {/* ABOUT */}
             <section className="sec" id="about" style={{paddingTop:0}}>
                 <div className="wrap">
                     <div id="foundh" data-reveal>
-                        <div className={`stag ${r("foundh")}`}>The founder</div>
-                        <h2 className={`sh2 ${r("foundh",100)}`}>Built by someone<br/>who felt the gap.</h2>
+                        <div className={`stag ${r("foundh")}`}>About SwayNow</div>
+                        <h2 className={`sh2 ${r("foundh",100)}`}>Built for the<br/>moments worth sharing.</h2>
                     </div>
                     <div id="foundc" data-reveal className={`fw ${r("foundc",150)}`}>
                         <div>
-                            <div className="fq">&ldquo;I moved to Berlin as a student. I had <em>no one</em> to explore the city with. That feeling — being somewhere exciting and experiencing it alone — is exactly what SwayNow is built to solve.&rdquo;</div>
-                            <p className="fb">SwayNow isn&apos;t built around metrics or growth hacks. It&apos;s built around a genuine belief: that the best experiences happen when you say yes to an unexpected person. Every feature exists because I needed it myself.</p>
-                            <div className="fsig">— Kartik Kushwaha, Founder</div>
+                            <div className="fq">Cities are full of people who&apos;d get along — <em>they just never cross paths at the right moment.</em> SwayNow exists to close that gap.</div>
+                            <p className="fb">It started from a feeling everyone knows: being somewhere new with no easy way to find someone to share the moment with. SwayNow is a spontaneous social app for meeting people nearby right now — built for students, travellers, newcomers, and anyone who&apos;d rather go do the thing than scroll alone. No swiping, no pressure — just real plans and real people close enough to actually meet.</p>
+                            <p className="fb">It&apos;s independent, privacy-minded, and only as good as the community on it. Thanks for being early.</p>
                         </div>
                         <div className="fcr">
-                            <div className="fav">K</div>
-                            <div className="fn">Kartik Kushwaha</div>
-                            <div className="ft">Founder · SwayNow</div>
+                            <div className="fav">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" style={{width:34,height:34}}>
+                                    <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/>
+                                    <circle cx="12" cy="10" r="3" fill="white" stroke="none"/>
+                                </svg>
+                            </div>
+                            <div className="fn">SwayNow</div>
+                            <div className="ft">Spontaneous meetups, nearby</div>
                             <div className="fchips">
-                                {["Berlin","HTW Berlin","Media Informatics","Solo founder","From India"].map(c=>(
+                                {["Meet nearby","Right now","No swiping","Real plans","Privacy-minded"].map(c=>(
                                     <span className="fch" key={c}>{c}</span>
                                 ))}
                             </div>

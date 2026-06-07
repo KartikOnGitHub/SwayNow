@@ -327,3 +327,48 @@ export async function deletePost(postId: string, currentUserId: string): Promise
     const { deleteDoc } = await import("firebase/firestore");
     await deleteDoc(ref);
 }
+
+// ── Admin moderation ───────────────────────────────────────
+
+/** Ban a user: marks their user doc as banned and deletes all their active posts. */
+export async function banUser(targetUserId: string, reason: string): Promise<void> {
+    const { serverTimestamp, writeBatch } = await import("firebase/firestore");
+    // Mark user as banned
+    await updateDoc(doc(db, "users", targetUserId), {
+        banned: true,
+        bannedReason: reason || "Violation of community guidelines",
+        bannedAt: serverTimestamp(),
+    });
+    // Delete all their posts
+    const theirPosts = await getDocs(query(collection(db, "posts"), where("userId", "==", targetUserId)));
+    if (!theirPosts.empty) {
+        const batch = writeBatch(db);
+        theirPosts.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+    }
+}
+
+/** Lift a ban. */
+export async function unbanUser(targetUserId: string): Promise<void> {
+    const { deleteField } = await import("firebase/firestore");
+    await updateDoc(doc(db, "users", targetUserId), {
+        banned: false,
+        bannedReason: deleteField(),
+        bannedAt: deleteField(),
+    });
+}
+
+/** Admin: delete any post regardless of owner. */
+export async function adminDeletePost(postId: string): Promise<void> {
+    const { deleteDoc } = await import("firebase/firestore");
+    await deleteDoc(doc(db, "posts", postId));
+}
+
+/** Mark a report as reviewed/resolved. */
+export async function resolveReport(reportId: string): Promise<void> {
+    const { serverTimestamp } = await import("firebase/firestore");
+    await updateDoc(doc(db, "reports", reportId), {
+        status: "resolved",
+        resolvedAt: serverTimestamp(),
+    });
+}

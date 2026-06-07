@@ -56,6 +56,7 @@ const LOCATIONS: Record<string, string[]> = {
     "🇨🇿 Czechia":["Prague","Brno"],
     "🇭🇺 Hungary":["Budapest"],
     "🇹🇷 Turkey":["Istanbul","Antalya","Bodrum"],
+    "🇷🇺 Russia":["Moscow","Saint Petersburg","Novosibirsk","Yekaterinburg","Kazan","Chelyabinsk","Nizhny Novgorod","Samara","Sochi","Vladivostok"],
     "🇺🇸 USA":["New York","Los Angeles","Miami","San Francisco","Chicago","Las Vegas","Austin","Seattle","Boston"],
     "🇨🇦 Canada":["Toronto","Vancouver","Montreal","Calgary"],
     "🇲🇽 Mexico":["Mexico City","Cancún","Tulum","Oaxaca"],
@@ -473,6 +474,8 @@ export default function Home() {
     const [navTab, setNavTab]           = useState<NavTab>("feed");
     const [userProfile, setUserProfile] = useState<import("../../lib/profile").UserProfile | null>(null);
     const [needsProfile, setNeedsProfile] = useState(false);
+    const [isBanned, setIsBanned]         = useState(false);
+    const [bannedReason, setBannedReason] = useState("");
     const [obBio, setObBio]               = useState("");
     const [obInterests, setObInterests]   = useState<string[]>([]);
     const [obSaving, setObSaving]         = useState(false);
@@ -546,6 +549,13 @@ export default function Home() {
                         setNeedsProfile(true);
                     } else {
                         const data = snap.data();
+                        // Banned users are locked out
+                        if (data.banned === true) {
+                            setIsBanned(true);
+                            setBannedReason(data.bannedReason || "");
+                            setLoading(false);
+                            return;
+                        }
                         // Always keep the Google photo fresh
                         if (u.photoURL && data.photoURL !== u.photoURL) {
                             await setDoc(ref, { photoURL: u.photoURL, updatedAt: st() }, { merge: true });
@@ -914,6 +924,23 @@ export default function Home() {
                 {" "}and{" "}
                 <a href="/legal/privacy" className="underline hover:text-white transition-colors">Privacy Policy</a>
             </p>
+        </main>
+    );
+
+    // ── Banned ──
+    if (isBanned) return (
+        <main className="min-h-screen bg-[#0B0B0F] text-white flex items-center justify-center px-6">
+            <div className="max-w-sm text-center space-y-4">
+                <div className="text-4xl">🚫</div>
+                <h1 className="text-xl font-bold">Your account has been suspended</h1>
+                <p className="text-sm text-[#A1A1AA] leading-relaxed">
+                    Your access to SwayNow has been removed for violating our community guidelines.
+                    {bannedReason ? ` Reason: ${bannedReason}.` : ""}
+                </p>
+                <p className="text-xs text-[#52525B]">If you believe this is a mistake, contact support.</p>
+                <button onClick={() => signOut(auth).catch(() => {})}
+                        className="mt-2 text-sm text-blue-400 hover:text-blue-300 transition-colors">Sign out</button>
+            </div>
         </main>
     );
 
